@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BodyCam — Blockout</title>
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background: #000;
+        height: 100%;
+      }
+      #app {
+        width: 100%;
+        height: 100%;
+      }
+      #hud {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        font-family: monospace;
+        color: #eee;
+      }
+      #crosshair {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 6px;
+        height: 6px;
+        margin: -3px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.8);
+        mix-blend-mode: difference;
+      }
+      #info {
+        position: absolute;
+        top: 12px;
+        left: 12px;
+        font-size: 13px;
+        line-height: 1.5;
+        background: rgba(0, 0, 0, 0.35);
+        padding: 8px 10px;
+        border-radius: 4px;
+      }
+      #stats {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        font-size: 13px;
+        line-height: 1.5;
+        background: rgba(0, 0, 0, 0.35);
+        padding: 8px 10px;
+        border-radius: 4px;
+      }
+      #blocker {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #eee;
+        font-family: monospace;
+        text-align: center;
+        cursor: pointer;
+      }
+      #blocker.hidden {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="hud">
+      <div id="crosshair"></div>
+      <div id="info">
+        WASD Bewegen · Shift Sprint · Space Springen<br />
+        Linksklick Schießen · Maus Umschauen<br />
+        Mausrad Sichtweite · F Nebel an/aus
+      </div>
+      <div id="stats"></div>
+    </div>
+    <div id="blocker">Klicken, um Maussteuerung zu aktivieren</div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
