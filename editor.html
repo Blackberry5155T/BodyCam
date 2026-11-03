@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BodyCam Map-Editor</title>
+  </head>
+  <body>
+    <div id="menubar"></div>
+    <div id="toolbar"></div>
+    <div id="workspace">
+      <div id="left">
+        <div id="viewport"></div>
+        <div class="splitter horizontal" data-split="content"></div>
+        <div id="content" class="panel"></div>
+      </div>
+      <div class="splitter vertical" data-split="right"></div>
+      <div id="right">
+        <div id="outliner" class="panel"></div>
+        <div class="splitter horizontal" data-split="details"></div>
+        <div id="details" class="panel"></div>
+      </div>
+    </div>
+    <div id="statusbar"></div>
+    <script type="module" src="/src/editor/main.ts"></script>
+  </body>
+</html>

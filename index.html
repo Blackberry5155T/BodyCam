@@ -20,39 +20,100 @@
         position: fixed;
         inset: 0;
         pointer-events: none;
-        font-family: monospace;
-        color: #eee;
+        font-family: Consolas, 'Courier New', monospace;
+        color: #e8e8e0;
+        text-shadow: 0 0 3px rgba(0, 0, 0, 0.9), 0 0 1px rgba(0, 0, 0, 1);
+        letter-spacing: 0.04em;
       }
-      #crosshair {
+      /* Bodycam-Overlay */
+      #rec {
         position: absolute;
-        top: 50%;
-        left: 50%;
-        width: 6px;
-        height: 6px;
-        margin: -3px;
-        border-radius: 50%;
-        background: rgba(255, 255, 255, 0.8);
-        mix-blend-mode: difference;
+        top: 5vh;
+        left: 7vw;
+        font-size: 15px;
+        line-height: 1.5;
+        opacity: 0.85;
       }
+      #rec .dot {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        margin-right: 6px;
+        border-radius: 50%;
+        background: #e3242b;
+        box-shadow: 0 0 6px #e3242b;
+        animation: blink 1.2s steps(1) infinite;
+      }
+      @keyframes blink {
+        50% { opacity: 0; }
+      }
+      #unit {
+        position: absolute;
+        bottom: 5vh;
+        right: 7vw;
+        font-size: 13px;
+        text-align: right;
+        line-height: 1.5;
+        opacity: 0.75;
+      }
+      #battery {
+        display: inline-block;
+        width: 26px;
+        height: 11px;
+        border: 1px solid currentColor;
+        margin-left: 6px;
+        vertical-align: -1px;
+        position: relative;
+      }
+      #battery::before {
+        content: '';
+        position: absolute;
+        inset: 1px 7px 1px 1px;
+        background: currentColor;
+      }
+      /* Debug-Info (H blendet aus) */
       #info {
         position: absolute;
-        top: 12px;
-        left: 12px;
-        font-size: 13px;
+        bottom: 5vh;
+        left: 7vw;
+        font-size: 12px;
         line-height: 1.5;
-        background: rgba(0, 0, 0, 0.35);
-        padding: 8px 10px;
-        border-radius: 4px;
+        opacity: 0.6;
       }
       #stats {
         position: absolute;
-        top: 12px;
-        right: 12px;
-        font-size: 13px;
+        top: 5vh;
+        right: 7vw;
+        font-size: 12px;
         line-height: 1.5;
-        background: rgba(0, 0, 0, 0.35);
-        padding: 8px 10px;
-        border-radius: 4px;
+        text-align: right;
+        opacity: 0.6;
+      }
+      #prompt {
+        position: absolute;
+        left: 50%;
+        top: 62%;
+        transform: translateX(-50%);
+        font-size: 16px;
+        padding: 6px 14px;
+        border: 1px solid rgba(63, 196, 255, 0.6);
+        background: rgba(6, 16, 21, 0.55);
+        color: #9fe2ff;
+      }
+      #message {
+        position: absolute;
+        left: 50%;
+        top: 30%;
+        transform: translateX(-50%);
+        max-width: 60vw;
+        text-align: center;
+        font-size: 20px;
+        padding: 8px 18px;
+        background: rgba(0, 0, 0, 0.45);
+        border-left: 3px solid #e3242b;
+      }
+      .hidden {
+        display: none;
       }
       #blocker {
         position: fixed;
@@ -62,7 +123,7 @@
         align-items: center;
         justify-content: center;
         color: #eee;
-        font-family: monospace;
+        font-family: Consolas, 'Courier New', monospace;
         text-align: center;
         cursor: pointer;
       }
@@ -74,12 +135,11 @@
   <body>
     <div id="app"></div>
     <div id="hud">
-      <div id="crosshair"></div>
-      <div id="info">
-        WASD Bewegen · Shift Sprint · Space Springen<br />
-        Linksklick Schießen · Maus Umschauen<br />
-        Mausrad Sichtweite · F Nebel an/aus
-      </div>
+      <div id="rec"><span class="dot"></span>REC<br /><span id="rec-time"></span></div>
+      <div id="unit">UNIT 07 · CAM 2<span id="battery"></span><br />SN 4471-0932</div>
+      <div id="info"></div>
+      <div id="prompt" class="hidden"></div>
+      <div id="message" class="hidden"></div>
       <div id="stats"></div>
     </div>
     <div id="blocker">Klicken, um Maussteuerung zu aktivieren</div>

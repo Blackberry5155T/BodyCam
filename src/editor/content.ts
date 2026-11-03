@@ -1,0 +1,128 @@
+import { CATEGORIES, PRESETS, type AssetPreset } from '../world/assets.ts';
+import { modelLabel } from '../world/modelStore.ts';
+import { CATEGORY_COLORS, icon } from './icons.ts';
+import { confirmDialog, h, pickFile, toast } from './ui.ts';
+import { models } from './models.ts';
+
+// Content Browser (unten): Assets nach Ordnern, per Drag & Drop in den Viewport oder Doppelklick platzieren.
+
+export type Folder = 'Alle' | string;
+
+export class ContentBrowser {
+  private folder: Folder = 'Alle';
+  private tree: HTMLElement;
+  private grid: HTMLElement;
+  private search: HTMLInputElement;
+  private path: HTMLElement;
+  /** Gerade gezogenes Asset (dataTransfer ist während dragover nicht lesbar) */
+  static dragging: AssetPreset | null = null;
+  onPlace?: (preset: AssetPreset) => void;
+
+  constructor(root: HTMLElement) {
+    this.search = h('input', { class: 'search', type: 'text', placeholder: 'Assets durchsuchen…', spellcheck: 'false', style: 'max-width:280px' });
+    this.search.addEventListener('input', () => this.renderGrid());
+    this.search.addEventListener('keydown', (e) => e.stopPropagation());
+    const importBtn = h('button', { class: 'btn', html: `${icon('upload')}Importieren` , title: '.glb-Modell in diesen Browser importieren' });
+    importBtn.addEventListener('click', () => this.importModel());
+    this.path = h('span', { style: 'color:var(--text-dim);margin-left:8px' });
+    this.tree = h('div', { class: 'content-tree' });
+    this.grid = h('div', { class: 'content-grid' });
+    root.append(
+      h('div', { class: 'panel-tabs' }, h('div', { class: 'panel-tab active', html: `${icon('folder')}Content Browser` })),
+      h('div', { class: 'panel-toolbar' }, importBtn, this.path, h('div', { class: 'tb-spacer' }), this.search),
+      h('div', { class: 'content-main' }, this.tree, this.grid),
+    );
+    models.onChange(() => this.render());
+    this.render();
+  }
+
+  private presets(): AssetPreset[] {
+    const modelPresets = models.all.map(
+      (ref): AssetPreset => ({
+        id: `model:${ref}`,
+        label: modelLabel(ref),
+        category: ref.startsWith('idb:') ? 'Modelle/Importiert' : 'Modelle/Projekt',
+        type: 'model',
+        icon: 'model',
+        props: { model: ref },
+      }),
+    );
+    return [...PRESETS, ...modelPresets];
+  }
+
+  render(): void {
+    const all = this.presets();
+    const count = (f: string) => all.filter((p) => f === 'Alle' || p.category === f || p.category.startsWith(f + '/')).length;
+    const item = (f: string, label: string, sub = false) => {
+      const el = h('div', { class: `tree-item${sub ? ' sub' : ''}${this.folder === f ? ' active' : ''}`, html: `${icon('folder')}<span>${label}</span>` }, h('span', { class: 'count' }, String(count(f))));
+      el.addEventListener('click', () => {
+        this.folder = f;
+        this.render();
+      });
+      return el;
+    };
+    this.tree.replaceChildren(
+      item('Alle', 'Alle Assets'),
+      ...CATEGORIES.flatMap((c) => (c === 'Modelle' ? [item(c, c), item('Modelle/Projekt', 'Projekt', true), item('Modelle/Importiert', 'Importiert', true)] : [item(c, c)])),
+    );
+    this.renderGrid();
+  }
+
+  private renderGrid(): void {
+    const q = this.search.value.trim().toLowerCase();
+    const list = this.presets().filter(
+      (p) => (this.folder === 'Alle' || p.category === this.folder || p.category.startsWith(this.folder + '/')) && (!q || p.label.toLowerCase().includes(q)),
+    );
+    this.path.textContent = `Inhalt › ${this.folder.replace('/', ' › ')}`;
+    this.grid.replaceChildren(
+      ...list.map((p) => {
+        const cat = p.category.split('/')[0];
+        const color = CATEGORY_COLORS[cat] ?? '#888';
+        const tile = h(
+          'div',
+          { class: 'tile', draggable: 'true', title: `${p.label}\nZiehen zum Platzieren · Doppelklick: vor der Kamera einfügen` },
+          h('div', { class: 'thumb', style: `color:${color}`, html: icon(p.icon) }),
+          h('div', { class: 'bar', style: `background:${color}` }),
+          h('div', { class: 'label' }, p.label),
+        );
+        if (p.category === 'Modelle/Importiert') {
+          const del = h('div', { class: 'del', title: 'Aus dem Browser löschen', html: icon('trash', 'width="12" height="12"') });
+          del.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (await confirmDialog('Modell löschen', `„${p.label}“ aus dem Browser-Speicher löschen? Objekte, die es verwenden, zeigen dann nur noch einen Platzhalter.`, 'Löschen', true)) {
+              await models.remove(String(p.props?.model));
+            }
+          });
+          tile.append(del);
+        }
+        tile.addEventListener('dragstart', (e) => {
+          ContentBrowser.dragging = p;
+          e.dataTransfer?.setData('application/x-bodycam-asset', p.id);
+          e.dataTransfer!.effectAllowed = 'copy';
+        });
+        tile.addEventListener('dragend', () => (ContentBrowser.dragging = null));
+        tile.addEventListener('dblclick', () => this.onPlace?.(p));
+        return tile;
+      }),
+    );
+    if (!list.length) {
+      const hint = this.folder.startsWith('Modelle')
+        ? 'Keine Modelle. Lege .glb-Dateien nach public/assets/models/ oder klicke „Importieren“.'
+        : 'Keine passenden Assets.';
+      this.grid.append(h('div', { class: 'empty-hint', style: 'grid-column:1/-1' }, hint));
+    }
+  }
+
+  private async importModel(): Promise<void> {
+    const file = await pickFile('.glb');
+    if (!file) return;
+    try {
+      const ref = await models.import(file);
+      this.folder = 'Modelle/Importiert';
+      this.render();
+      toast(`Modell „${modelLabel(ref)}“ importiert — jetzt in den Viewport ziehen`, 'ok');
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    }
+  }
+}

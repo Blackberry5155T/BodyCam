@@ -1,0 +1,792 @@
+{
+  "format": "bodycam-map",
+  "version": 1,
+  "name": "Startmap",
+  "world": {
+    "background": "#353b42",
+    "fogColor": "#353b42",
+    "skyColor": "#7d8a99",
+    "groundColor": "#1c1915",
+    "hemiIntensity": 0.55,
+    "sunColor": "#aebdd0",
+    "sunIntensity": 0.9,
+    "sunAzimuth": 63.4,
+    "sunElevation": 53.3,
+    "sunShadow": true,
+    "sunShadowArea": 25,
+    "groundFog": true,
+    "groundFogOpacity": 0.22,
+    "groundFogHeight": 0.4,
+    "groundFogSize": 40,
+    "exposure": 1
+  },
+  "objects": [
+    {
+      "id": "start01",
+      "name": "Boden",
+      "type": "box",
+      "pos": [
+        0,
+        -0.05,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        40,
+        0.1,
+        40
+      ],
+      "props": {
+        "material": "bodenfliesen",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": false,
+        "collision": true
+      }
+    },
+    {
+      "id": "start02",
+      "name": "Außenwand Nord",
+      "type": "box",
+      "pos": [
+        0,
+        1.5,
+        -20
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        40,
+        3,
+        0.3
+      ],
+      "props": {
+        "material": "wand_beton",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "start03",
+      "name": "Außenwand Süd",
+      "type": "box",
+      "pos": [
+        0,
+        1.5,
+        20
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        40,
+        3,
+        0.3
+      ],
+      "props": {
+        "material": "wand_beton",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "start04",
+      "name": "Außenwand West",
+      "type": "box",
+      "pos": [
+        -20,
+        1.5,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.3,
+        3,
+        40
+      ],
+      "props": {
+        "material": "wand_beton",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "start05",
+      "name": "Außenwand Ost",
+      "type": "box",
+      "pos": [
+        20,
+        1.5,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.3,
+        3,
+        40
+      ],
+      "props": {
+        "material": "wand_beton",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "start06",
+      "name": "Flurwand links",
+      "type": "box",
+      "pos": [
+        -1.25,
+        1.5,
+        -14.7
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.3,
+        3,
+        10
+      ],
+      "props": {
+        "material": "wand_beton",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "start07",
+      "name": "Flurwand rechts",
+      "type": "box",
+      "pos": [
+        1.25,
+        1.5,
+        -14.7
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.3,
+        3,
+        10
+      ],
+      "props": {
+        "material": "wand_beton",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "start08",
+      "name": "Flurdecke",
+      "type": "box",
+      "pos": [
+        0,
+        3.1,
+        -14.7
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        2.8000000000000003,
+        0.2,
+        10
+      ],
+      "props": {
+        "material": "decke",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "start09",
+      "name": "Röhre Flur hinten",
+      "type": "lamp",
+      "pos": [
+        0,
+        2.94,
+        -17.2
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {
+        "color": "#dde6ff",
+        "intensity": 9,
+        "distance": 9,
+        "shadow": true,
+        "flicker": false,
+        "on": true,
+        "tubeX": 0.08,
+        "tubeY": 0.04,
+        "tubeZ": 1.2,
+        "housing": true
+      }
+    },
+    {
+      "id": "start10",
+      "name": "Röhre Flur vorne (flackert)",
+      "type": "lamp",
+      "pos": [
+        0,
+        2.94,
+        -12.2
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {
+        "color": "#dde6ff",
+        "intensity": 9,
+        "distance": 9,
+        "shadow": false,
+        "flicker": true,
+        "on": true,
+        "tubeX": 0.08,
+        "tubeY": 0.04,
+        "tubeZ": 1.2,
+        "housing": true
+      }
+    },
+    {
+      "id": "start11",
+      "name": "Türwand Raum A",
+      "type": "doorwall",
+      "pos": [
+        0,
+        1.5,
+        -9.55
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        12,
+        3,
+        0.3
+      ],
+      "props": {
+        "doorWidth": 1,
+        "doorHeight": 2.1,
+        "doorOffset": 0,
+        "material": "beton_gelb",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "start12",
+      "name": "Deckung 1",
+      "type": "box",
+      "pos": [
+        -2.5,
+        0.6,
+        -3.55
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.4,
+        1.2,
+        0.6
+      ],
+      "props": {
+        "material": "holz",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "start13",
+      "name": "Deckung 2",
+      "type": "box",
+      "pos": [
+        2.5,
+        0.6,
+        -1.55
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.4,
+        1.2,
+        0.6
+      ],
+      "props": {
+        "material": "holz",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "start14",
+      "name": "Deckung 3",
+      "type": "box",
+      "pos": [
+        0,
+        0.6,
+        0.45
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.4,
+        1.2,
+        0.6
+      ],
+      "props": {
+        "material": "holz",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "start15",
+      "name": "Natriumdampflampe",
+      "type": "lamp",
+      "pos": [
+        -2.5,
+        2.6,
+        -9.34
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {
+        "color": "#ffa65a",
+        "intensity": 14,
+        "distance": 14,
+        "shadow": false,
+        "flicker": false,
+        "on": true,
+        "tubeX": 0.5,
+        "tubeY": 0.08,
+        "tubeZ": 0.1,
+        "housing": true
+      }
+    },
+    {
+      "id": "start16",
+      "name": "Pfeiler 1",
+      "type": "cylinder",
+      "pos": [
+        -3,
+        1.5,
+        4.45
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        3,
+        1
+      ],
+      "props": {
+        "material": "beton_dunkel",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true,
+        "segments": 32
+      }
+    },
+    {
+      "id": "start17",
+      "name": "Pfeiler 2",
+      "type": "cylinder",
+      "pos": [
+        3,
+        1.5,
+        4.45
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        3,
+        1
+      ],
+      "props": {
+        "material": "beton_dunkel",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true,
+        "segments": 32
+      }
+    },
+    {
+      "id": "start18",
+      "name": "Pfeiler 3",
+      "type": "cylinder",
+      "pos": [
+        -3,
+        1.5,
+        8.45
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        3,
+        1
+      ],
+      "props": {
+        "material": "beton_dunkel",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true,
+        "segments": 32
+      }
+    },
+    {
+      "id": "start19",
+      "name": "Pfeiler 4",
+      "type": "cylinder",
+      "pos": [
+        3,
+        1.5,
+        8.45
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        3,
+        1
+      ],
+      "props": {
+        "material": "beton_dunkel",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true,
+        "segments": 32
+      }
+    },
+    {
+      "id": "start20",
+      "name": "Laternenmast",
+      "type": "cylinder",
+      "pos": [
+        0,
+        1.7,
+        6.45
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.14,
+        3.4,
+        0.14
+      ],
+      "props": {
+        "material": "metall",
+        "color": "#3a3d40",
+        "roughness": 0.45,
+        "metalness": 0.8,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true,
+        "segments": 32
+      }
+    },
+    {
+      "id": "start21",
+      "name": "Laternenlicht",
+      "type": "lamp",
+      "pos": [
+        0,
+        3.4,
+        6.45
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {
+        "color": "#c8dcff",
+        "intensity": 30,
+        "distance": 16,
+        "shadow": true,
+        "flicker": false,
+        "on": true,
+        "tubeX": 0.35,
+        "tubeY": 0.06,
+        "tubeZ": 0.35,
+        "housing": true
+      }
+    },
+    {
+      "id": "start22",
+      "name": "Referenz-Würfel 1 m",
+      "type": "box",
+      "pos": [
+        -4,
+        0.5,
+        -5.55
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {
+        "material": "holz",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "start23",
+      "name": "Referenz-Figur 1.8 m",
+      "type": "box",
+      "pos": [
+        1.5,
+        0.9,
+        -8.55
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.7,
+        1.8,
+        0.7
+      ],
+      "props": {
+        "material": "farbe",
+        "color": "#2f4a66",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "start24",
+      "name": "Player Start",
+      "type": "spawn",
+      "pos": [
+        0,
+        0,
+        -17
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {}
+    },
+    {
+      "id": "start25",
+      "name": "Terminal",
+      "type": "terminal",
+      "pos": [
+        0,
+        1.5,
+        -19.85
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {}
+    }
+  ]
+}
