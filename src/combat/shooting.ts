@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { volumeFX } from '../world/volumetrics.ts';
 
 export interface ShotResult {
   hit: boolean;
@@ -49,6 +50,8 @@ export class Shooter {
     scene.add(this.group);
     // Licht existiert dauerhaft (Intensität 0), damit beim ersten Schuss kein Shader-Recompile ruckelt
     scene.add(this.flash);
+    // Mündungsfeuer beleuchtet Nebel und Rauch
+    volumeFX.addLight(this.flash);
   }
 
   fire(camera: THREE.Camera, muzzlePos?: THREE.Vector3): ShotResult {
@@ -63,6 +66,8 @@ export class Shooter {
     const hit = this.raycaster.intersectObjects(this.targets, true).find((h) => isSolid(h.object));
     const end = hit ? hit.point : ray.origin.clone().addScaledVector(ray.direction, 120);
     this.spawnTracer(muzzle, end);
+    // Schussbahn reißt eine Schneise in Nebel/Rauch, Feuer sprühen Funken
+    volumeFX.addShot(muzzle, end);
 
     if (!hit) return { hit: false };
 

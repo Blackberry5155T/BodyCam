@@ -1,15 +1,17 @@
 import * as THREE from 'three';
-import type { Collider } from '../world/collision.ts';
 import type { BodyAnimState } from './body.ts';
 import type { Input } from '../core/input.ts';
 import type { Settings } from '../core/settings.ts';
-import { SCALE, closestXZ, colliderMaxY, colliderMinY } from '../world/collision.ts';
+import { SCALE } from '../world/collision.ts';
+import { RAPIER, WORLD_QUERY, type PhysicsWorld } from '../physics/physics.ts';
 
 const WALK_SPEED = 3.2; // m/s, grob an realistischem Gehtempo orientiert
 const SPRINT_SPEED = 6.0;
 const JUMP_SPEED = 4.5;
 const GRAVITY = -9.81;
 const STEP_HEIGHT = 0.3;
+const MAX_SLOPE = 50 * THREE.MathUtils.DEG2RAD; // steilere Flächen: abrutschen statt hochlaufen
+const SKIN = 0.01; // Abstand der Kapsel zur Geometrie (Rapier-Offset)
 const GROUND_ACCEL = 11; // Beschleunigungsrate am Boden (1/s), gibt Gewicht
 const AIR_ACCEL = 1.5;
 
@@ -79,6 +81,11 @@ export class PlayerController {
   private focus: FocusTarget | null = null;
   private lockListeners: ((locked: boolean) => void)[] = [];
 
+  // Kollision (Rapier): Kapsel von den Füßen bis zur Augenhöhe
+  private kcc: RAPIER.KinematicCharacterController;
+  private capsule: RAPIER.Collider;
+  private capsuleHeight = 0;
+
   // Blick: Ziel (Maus) und geglättete Ansicht
   private yaw = 0;
   private pitch = 0;
@@ -102,7 +109,7 @@ export class PlayerController {
   constructor(
     private camera: THREE.PerspectiveCamera,
     private domElement: HTMLElement,
-    private colliders: Collider[],
+    private physics: PhysicsWorld,
     spawn: THREE.Vector3,
     private input: Input,
     private settings: Settings,
@@ -112,6 +119,18 @@ export class PlayerController {
     this.yaw = this.viewYaw = spawnYaw;
     camera.rotation.order = 'YXZ';
     this.fov = settings.data.fov;
+
+    const kcc = physics.world.createCharacterController(SKIN);
+    kcc.setUp({ x: 0, y: 1, z: 0 });
+    kcc.enableAutostep(STEP_HEIGHT, 0.1, false);
+    kcc.enableSnapToGround(STEP_HEIGHT);
+    kcc.setMaxSlopeClimbAngle(MAX_SLOPE);
+    kcc.setMinSlopeSlideAngle(MAX_SLOPE);
+    kcc.setSlideEnabled(true);
+    kcc.setApplyImpulsesToDynamicBodies(true);
+    this.kcc = kcc;
+    this.capsule = physics.createCharacterCapsule(0.5, SCALE.playerRadius);
+    this.placeCapsule(this.position.y - this.height);
 
     document.addEventListener('mousemove', (e) => {
       if (!this.isLocked || this.focus) return;
@@ -239,30 +258,31 @@ export class PlayerController {
     }
     this.velocity.y += GRAVITY * dt;
 
+    // Bewegung über den Rapier-Character-Controller: gleitet an Wänden, steigt Stufen, hält Hänge
     const pos = this.position;
-    const prevX = pos.x;
-    const prevZ = pos.z;
-
-    pos.x += this.velocity.x * dt;
-    this.resolveCollisionsAxis(pos, 'x');
-    pos.z += this.velocity.z * dt;
-    this.resolveCollisionsAxis(pos, 'z');
+    const wasOnGround = this.onGround;
+    const fallSpeed = this.velocity.y;
+    const feet = pos.y - this.height;
+    this.placeCapsule(feet);
+    _move.x = this.velocity.x * dt;
+    _move.y = this.velocity.y * dt;
+    _move.z = this.velocity.z * dt;
+    this.kcc.computeColliderMovement(this.capsule, _move, undefined, WORLD_QUERY);
+    const moved = this.kcc.computedMovement();
+    const grounded = this.kcc.computedGrounded();
+    pos.x += moved.x;
+    pos.z += moved.z;
+    pos.y += moved.y;
+    this.placeCapsule(pos.y - this.height);
 
     // Tatsächliche Bewegung übernehmen → an Wänden entlang gleiten, kein Kopfwippen beim Gegen-die-Wand-Laufen
     if (dt > 0) {
-      this.velocity.x = (pos.x - prevX) / dt;
-      this.velocity.z = (pos.z - prevZ) / dt;
+      this.velocity.x = moved.x / dt;
+      this.velocity.z = moved.z / dt;
     }
     this.groundSpeed = Math.hypot(this.velocity.x, this.velocity.z);
 
-    // Y-Achse: auf höchster Oberfläche unter den Füßen landen
-    const wasOnGround = this.onGround;
-    const fallSpeed = this.velocity.y;
-    const prevFeet = pos.y - this.height;
-    pos.y += this.velocity.y * dt;
-    const ground = this.groundHeight(pos, prevFeet);
-    if (pos.y - this.height <= ground) {
-      pos.y = ground + this.height;
+    if (grounded && this.velocity.y <= 0) {
       this.velocity.y = 0;
       this.onGround = true;
       if (!wasOnGround) {
@@ -271,6 +291,8 @@ export class PlayerController {
         this.trauma = Math.min(1, this.trauma + impact * 0.04);
       }
     } else {
+      // Kopf an der Decke: Aufwärtsbewegung abbrechen
+      if (this.velocity.y > 0 && moved.y < _move.y * 0.5) this.velocity.y = 0;
       this.onGround = false;
     }
 
@@ -446,78 +468,64 @@ export class PlayerController {
     return { height: CROUCH_EYE, lean: 0 };
   }
 
-  /** Oberkante der höchsten Deckung, die auf Höhe y direkt vor dem Punkt steht (null = frei) */
-  private coverTop(x: number, z: number, dx: number, dz: number, y: number): number | null {
-    let top: number | null = null;
-    for (let t = SCALE.playerRadius * 0.6; t <= COVER_REACH; t += 0.08) {
-      const px = x + dx * t;
-      const pz = z + dz * t;
-      for (const c of this.colliders) {
-        if (y <= colliderMinY(c) || y >= colliderMaxY(c)) continue;
-        const d = closestXZ(c, px, pz);
-        const r = c.type === 'cylinder' ? c.radius : 0.04;
-        if (d.distSq < r * r) top = Math.max(top ?? -Infinity, colliderMaxY(c));
-      }
+  /** Kapsel so legen, dass ihre Unterkante (plus Skin) bei feetY liegt; Höhe = aktuelle Augenhöhe */
+  private placeCapsule(feetY: number): void {
+    const r = SCALE.playerRadius;
+    const h = Math.max(this.height, 2 * r + 0.05);
+    if (Math.abs(h - this.capsuleHeight) > 1e-4) {
+      this.capsule.setHalfHeight(h / 2 - r);
+      this.capsuleHeight = h;
     }
-    return top;
+    this.capsule.setTranslation({ x: this.position.x, y: feetY + SKIN + h / 2, z: this.position.z });
+  }
+
+  /** Oberkante der Deckung, die auf Höhe y direkt vor dem Punkt steht (null = frei) */
+  private coverTop(x: number, z: number, dx: number, dz: number, y: number): number | null {
+    const start = SCALE.playerRadius * 0.6;
+    _ray.origin = { x: x + dx * start, y, z: z + dz * start };
+    _ray.dir = { x: dx, y: 0, z: dz };
+    const hit = this.physics.world.castRay(_ray, COVER_REACH - start, true, undefined, WORLD_QUERY);
+    if (!hit) return null;
+    // Vom Treffer (knapp innerhalb) nach oben bis zur Oberfläche desselben Colliders
+    const t = hit.timeOfImpact + 0.01;
+    _up.origin = { x: _ray.origin.x + dx * t, y, z: _ray.origin.z + dz * t };
+    const toi = hit.collider.castRay(_up, 50, false);
+    return toi >= 0 ? y + toi : null;
   }
 
   /** Steckt ein dünner Körper (Kopf/Kamera) an dieser Stelle in einem Collider? */
   private pointBlocked(x: number, z: number, camY: number): boolean {
-    const lo = camY - 0.4;
-    const hi = camY + 0.35;
-    for (const c of this.colliders) {
-      if (hi <= colliderMinY(c) || lo >= colliderMaxY(c)) continue;
-      const d = closestXZ(c, x, z);
-      const r = c.type === 'cylinder' ? c.radius + LEAN_PROBE_RADIUS : LEAN_PROBE_RADIUS;
-      if (d.distSq < r * r) return true;
-    }
-    return false;
+    _probePos.x = x;
+    _probePos.y = camY - 0.025;
+    _probePos.z = z;
+    return this.physics.world.intersectionWithShape(_probePos, IDENTITY, PROBE, undefined, WORLD_QUERY) !== null;
   }
 
   /** Maximale Augenhöhe unter niedrigen Decken/Objekten (Aufstehen aus der Hocke) */
   private headroom(x: number, z: number, feetY: number): number {
-    const r = SCALE.playerRadius;
-    let max = STAND_EYE;
-    for (const c of this.colliders) {
-      const bottom = colliderMinY(c);
-      // Nur Objekte über dem geduckten Kopf; alles darunter blockiert ohnehin seitlich
-      if (bottom < feetY + CROUCH_EYE - 0.15 || bottom > feetY + STAND_EYE + 0.1) continue;
-      const d = closestXZ(c, x, z);
-      const reach = c.type === 'cylinder' ? c.radius + r : r;
-      if (d.distSq < reach * reach) max = Math.min(max, bottom - feetY - 0.05);
-    }
-    return max;
-  }
-
-  private groundHeight(pos: THREE.Vector3, prevFeet: number): number {
-    const r = SCALE.playerRadius;
-    let ground = 0;
-    for (const c of this.colliders) {
-      const top = colliderMaxY(c);
-      if (top > prevFeet + STEP_HEIGHT || top <= ground) continue;
-      const d = closestXZ(c, pos.x, pos.z);
-      const reach = c.type === 'cylinder' ? c.radius + r : r;
-      if (d.distSq < reach * reach) ground = top;
-    }
-    return ground;
-  }
-
-  private resolveCollisionsAxis(pos: THREE.Vector3, axis: 'x' | 'z'): void {
-    const r = SCALE.playerRadius;
-    const feetY = pos.y - this.height + STEP_HEIGHT;
-    const headY = pos.y - 0.1;
-
-    for (const c of this.colliders) {
-      if (feetY >= colliderMaxY(c) || headY <= colliderMinY(c)) continue;
-      const d = closestXZ(c, pos.x, pos.z);
-      const minDist = c.type === 'cylinder' ? r + c.radius : r;
-      if (d.distSq < minDist * minDist) {
-        const dist = Math.sqrt(d.distSq) || 0.0001;
-        const push = (minDist - dist) / dist;
-        if (axis === 'x') pos.x += d.dx * push;
-        else pos.z += d.dz * push;
-      }
-    }
+    // Dünne Scheibe vom geduckten Kopf nach oben schieben; nur Objekte, deren Unterkante darüber liegt
+    // (alles darunter blockiert ohnehin seitlich)
+    const from = feetY + CROUCH_EYE - 0.15;
+    const range = STAND_EYE + 0.1 - (CROUCH_EYE - 0.15);
+    _probePos.x = x;
+    _probePos.y = from;
+    _probePos.z = z;
+    const physics = this.physics;
+    const hit = physics.world.castShape(_probePos, IDENTITY, UPWARD, DISC, 0, range, false, undefined, WORLD_QUERY, undefined, undefined, (c) => physics.minY(c) >= from - 0.01);
+    if (!hit) return STAND_EYE;
+    return Math.min(STAND_EYE, from + hit.time_of_impact - DISC_HALF - feetY - 0.05);
   }
 }
+
+const _move = { x: 0, y: 0, z: 0 };
+const _ray = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: 0, z: 1 });
+const _up = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
+const _probePos = { x: 0, y: 0, z: 0 };
+const IDENTITY = { x: 0, y: 0, z: 0, w: 1 };
+const UPWARD = { x: 0, y: 1, z: 0 };
+// Kopf/Kamera beim Vorbeugen: Zylinder 0.15 m Radius, 0.75 m hoch
+const PROBE = new RAPIER.Cylinder(0.375, LEAN_PROBE_RADIUS);
+// Kopffreiheit: flache Scheibe etwas schmaler als die Kapsel (Wände daneben zählen nicht)
+const DISC_HALF = 0.01;
+const DISC = new RAPIER.Cylinder(DISC_HALF, SCALE.playerRadius - 0.03);
+

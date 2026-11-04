@@ -2,6 +2,7 @@ import * as Blockly from 'blockly';
 import { javascriptGenerator, Order } from 'blockly/javascript';
 import * as De from 'blockly/msg/de';
 import { registerFieldColour, colourPicker } from '@blockly/field-colour';
+import { WEATHER_OPTIONS } from '../world/weather.ts';
 
 // Scratch-ähnliche Blöcke für Map-Objekte (nur im Editor geladen).
 // Jeder Ereignis-Block ("Wenn ...") wird zu  api.on('<event>', async () => { ... }, <arg>);
@@ -12,6 +13,7 @@ export const CATEGORY_COLOURS = {
   motion: '#4C97FF',
   looks: '#9966FF',
   light: '#E6A700',
+  effects: '#E0522D',
   control: '#FFAB19',
   sensing: '#5CB1D6',
   operators: '#59C059',
@@ -115,6 +117,11 @@ const BLOCKS: Json[] = [
   stmt('bc_light_color', 'light', 'setze Lichtfarbe auf %1', [colour('C', '#ffd8a0')]),
   stmt('bc_light_flicker', 'light', 'setze Flackern %1', [{ type: 'field_dropdown', name: 'ON', options: ON_OFF }]),
   reporter('bc_light_is_on', 'light', 'Licht ist an?', [], 'Boolean'),
+  // Effekte (Feuer, Rauch, Funken)
+  stmt('bc_fx_set', 'effects', 'Effekt %1', [{ type: 'field_dropdown', name: 'MODE', options: [['starten', 'on'], ['stoppen', 'off'], ['umschalten', 'toggle']] }], 'Nur für Feuer, Rauch und Funken. Feuer brennt sanft an bzw. aus.'),
+  stmt('bc_fx_intensity', 'effects', 'setze Effektstärke auf %1 %', [num('V')], '100 % = wie im Editor eingestellt, bis 300 %.'),
+  stmt('bc_fx_burst', 'effects', 'Effekt-Ausbruch Stärke %1', [num('V')], 'Feuer: Stichflamme, Rauch: Rauchstoß, Funken: Funkenregen. 1 = normal.'),
+  reporter('bc_fx_is_on', 'effects', 'Effekt ist aktiv?', [], 'Boolean'),
 
   // Steuerung
   stmt('bc_wait', 'control', 'warte %1 Sek.', [num('S')]),
@@ -140,7 +147,55 @@ const BLOCKS: Json[] = [
   stmt('bc_teleport', 'world', 'teleportiere Spieler zu x %1 y %2 z %3', [num('X'), num('Y'), num('Z')], 'Fußposition des Spielers.'),
   stmt('bc_show_text', 'world', 'zeige Text %1 für %2 Sek.', [any('TEXT'), num('S')], 'Text in der Bildschirmmitte.'),
   stmt('bc_obj_show', 'world', '%1 Objekt %2', [{ type: 'field_dropdown', name: 'SHOW', options: [['zeige', 'true'], ['verstecke', 'false']] }, { type: 'field_input', name: 'NAME', text: 'Objektname' }]),
+  stmt('bc_set_weather', 'world', 'setze Wetter auf %1 mit Stärke %2', [{ type: 'field_dropdown', name: 'TYPE', options: WEATHER_OPTIONS.map((o) => [o.label, o.value]) }, num('I')], 'Wechselt das Wetter mit weicher Überblendung. Stärke 1 = normal, bis 2.'),
   stmt('bc_log', 'world', 'schreibe ins Log %1', [any('V')], 'Ausgabe in der Editor-Statusleiste / Browser-Konsole.'),
+
+  // ---------- Bildschirm (Figuren & Bühne) ----------
+  hat('sc_when_clicked', 'Wenn ich angeklickt werde', [], 'Figur: Klick auf die Figur. Bühne: Klick auf eine freie Stelle.'),
+  hat('sc_when_hover', 'Wenn der Mauszeiger auf mich zeigt', [], ''),
+  hat('sc_when_unhover', 'Wenn der Mauszeiger mich verlässt', [], ''),
+  hat('sc_when_use', 'Wenn Spieler den Bildschirm benutzt', [], 'Spieler tritt an den Bildschirm (Benutzen-Taste).'),
+  hat('sc_when_exit', 'Wenn Spieler den Bildschirm verlässt', [], ''),
+  stmt('sc_goto', 'motion', 'gehe zu x %1 y %2', [num('X'), num('Y')], 'Bühnenmitte = 0/0. Breite 480 (x −240 … 240).'),
+  stmt('sc_goto_mouse', 'motion', 'gehe zum Mauszeiger'),
+  stmt('sc_glide', 'motion', 'gleite in %1 Sek. zu x %2 y %3', [num('S'), num('X'), num('Y')]),
+  stmt('sc_change_x', 'motion', 'ändere x um %1', [num('V')]),
+  stmt('sc_set_x', 'motion', 'setze x auf %1', [num('V')]),
+  stmt('sc_change_y', 'motion', 'ändere y um %1', [num('V')]),
+  stmt('sc_set_y', 'motion', 'setze y auf %1', [num('V')]),
+  stmt('sc_turn', 'motion', 'drehe dich um %1 Grad', [num('V')]),
+  stmt('sc_set_rot', 'motion', 'setze Drehung auf %1 Grad', [num('V')]),
+  reporter('sc_x', 'motion', 'x-Position'),
+  reporter('sc_y', 'motion', 'y-Position'),
+  reporter('sc_rot', 'motion', 'Drehung'),
+  stmt('sc_say_for', 'looks', 'sage %1 für %2 Sek.', [any('TEXT'), num('S')], 'Sprechblase über der Figur, wartet so lange.'),
+  stmt('sc_say', 'looks', 'sage %1', [any('TEXT')], 'Leerer Text entfernt die Sprechblase.'),
+  stmt('sc_set_text', 'looks', 'setze Text auf %1', [any('TEXT')], 'Beschriftung der Figur, z. B. für Anzeigen und Punktestände.'),
+  stmt('sc_set_color', 'looks', 'setze Farbe auf %1', [colour('C', '#46d36b')]),
+  stmt('sc_set_text_color', 'looks', 'setze Textfarbe auf %1', [colour('C', '#ffffff')]),
+  stmt('sc_set_font', 'looks', 'setze Schriftgröße auf %1', [num('V')]),
+  stmt('sc_set_scale', 'looks', 'setze Größe auf %1 %', [num('V')]),
+  stmt('sc_change_scale', 'looks', 'ändere Größe um %1', [num('V')]),
+  stmt('sc_set_wh', 'looks', 'setze Breite %1 Höhe %2', [num('W'), num('H')]),
+  stmt('sc_set_ghost', 'looks', 'setze Transparenz auf %1 %', [num('V')]),
+  stmt('sc_set_shape', 'looks', 'ändere Form zu %1', [{ type: 'field_dropdown', name: 'SHAPE', options: [['Knopf', 'button'], ['Rechteck', 'rect'], ['Abgerundet', 'round'], ['Kreis', 'circle'], ['Nur Text', 'text']] }]),
+  stmt('sc_front', 'looks', 'komme nach vorne'),
+  reporter('sc_text', 'looks', 'Text', [], 'String'),
+  reporter('sc_scale', 'looks', 'Größe'),
+  stmt('sc_set_bg', 'looks', 'setze Hintergrund auf %1', [colour('C', '#102030')], 'Hintergrundfarbe der Bühne.'),
+  reporter('sc_mouse_x', 'sensing', 'Maus x'),
+  reporter('sc_mouse_y', 'sensing', 'Maus y'),
+  reporter('sc_mouse_down', 'sensing', 'Maustaste gedrückt?', [], 'Boolean'),
+  reporter('sc_touching_mouse', 'sensing', 'berühre ich den Mauszeiger?', [], 'Boolean'),
+  reporter('sc_screen_used', 'sensing', 'Bildschirm wird benutzt?', [], 'Boolean'),
+  {
+    ...reporter('sc_sprite_prop', 'sensing', '%1 von Figur %2', [
+      { type: 'field_dropdown', name: 'PROP', options: [['x-Position', 'x'], ['y-Position', 'y'], ['Drehung', 'rot'], ['Größe', 'scale'], ['Text', 'text'], ['sichtbar?', 'visible']] },
+      { type: 'field_input', name: 'NAME', text: 'Figur1' },
+    ]),
+    output: null,
+  },
+  stmt('sc_exit', 'world', 'verlasse den Bildschirm', [], 'Gibt den Spieler wieder frei (wie die Benutzen-Taste).'),
 ];
 
 export const EVENT_BLOCKS: Record<string, { event: string; arg?: (b: Blockly.Block) => string }> = {
@@ -153,6 +208,11 @@ export const EVENT_BLOCKS: Record<string, { event: string; arg?: (b: Blockly.Blo
   bc_when_near: { event: 'near', arg: (b) => String(Number(b.getFieldValue('DIST')) || 0) },
   bc_when_key: { event: 'key', arg: (b) => JSON.stringify(b.getFieldValue('KEY')) },
   bc_when_message: { event: 'message', arg: (b) => JSON.stringify(b.getFieldValue('MSG')) },
+  sc_when_clicked: { event: 'click' },
+  sc_when_hover: { event: 'hover' },
+  sc_when_unhover: { event: 'unhover' },
+  sc_when_use: { event: 'use' },
+  sc_when_exit: { event: 'exit' },
 };
 
 let installed = false;
@@ -214,6 +274,10 @@ export function installBlocks(): void {
   def('bc_light_color', (b) => `api.lightColor(${f(b, 'C')});\n`);
   def('bc_light_flicker', (b) => `api.lightFlicker(${b.getFieldValue('ON') === 'true'});\n`);
   def('bc_light_is_on', () => ['api.lightIsOn()', Order.FUNCTION_CALL]);
+  def('bc_fx_set', (b) => `api.fxSet(${f(b, 'MODE')});\n`);
+  def('bc_fx_intensity', (b) => `api.fxIntensity(${v(b, 'V')});\n`);
+  def('bc_fx_burst', (b) => `api.fxBurst(${v(b, 'V')});\n`);
+  def('bc_fx_is_on', () => ['api.fxIsOn()', Order.FUNCTION_CALL]);
 
   def('bc_wait', (b) => `await api.wait(${v(b, 'S', '1')});\n`);
   def('bc_forever', (b) => `while (true) {\n${g.statementToCode(b, 'DO')}${g.INDENT}await api.frame();\n}\n`);
@@ -230,7 +294,46 @@ export function installBlocks(): void {
   def('bc_teleport', (b) => `api.teleportPlayer(${xyz(b)});\n`);
   def('bc_show_text', (b) => `api.showText(${v(b, 'TEXT', "''")}, ${v(b, 'S', '2')});\n`);
   def('bc_obj_show', (b) => `api.objShow(${f(b, 'NAME')}, ${b.getFieldValue('SHOW') === 'true'});\n`);
+  def('bc_set_weather', (b) => `api.setWeather(${JSON.stringify(b.getFieldValue('TYPE'))}, ${v(b, 'I', '1')});
+`);
   def('bc_log', (b) => `api.log(${v(b, 'V', "''")});\n`);
+
+  // Bildschirm
+  const xy = (b: Blockly.Block) => `${v(b, 'X')}, ${v(b, 'Y')}`;
+  def('sc_goto', (b) => `api.goTo(${xy(b)});\n`);
+  def('sc_goto_mouse', () => 'api.goToMouse();\n');
+  def('sc_glide', (b) => `await api.glide(${xy(b)}, ${v(b, 'S', '1')});\n`);
+  def('sc_change_x', (b) => `api.changeX(${v(b, 'V')});\n`);
+  def('sc_set_x', (b) => `api.setX(${v(b, 'V')});\n`);
+  def('sc_change_y', (b) => `api.changeY(${v(b, 'V')});\n`);
+  def('sc_set_y', (b) => `api.setY(${v(b, 'V')});\n`);
+  def('sc_turn', (b) => `api.turn(${v(b, 'V')});\n`);
+  def('sc_set_rot', (b) => `api.setRot(${v(b, 'V')});\n`);
+  def('sc_x', () => ['api.x()', Order.FUNCTION_CALL]);
+  def('sc_y', () => ['api.y()', Order.FUNCTION_CALL]);
+  def('sc_rot', () => ['api.rot()', Order.FUNCTION_CALL]);
+  def('sc_say_for', (b) => `await api.sayFor(${v(b, 'TEXT', "''")}, ${v(b, 'S', '2')});\n`);
+  def('sc_say', (b) => `api.say(${v(b, 'TEXT', "''")});\n`);
+  def('sc_set_text', (b) => `api.setText(${v(b, 'TEXT', "''")});\n`);
+  def('sc_set_color', (b) => `api.setColor(${f(b, 'C')});\n`);
+  def('sc_set_text_color', (b) => `api.setTextColor(${f(b, 'C')});\n`);
+  def('sc_set_font', (b) => `api.setFontSize(${v(b, 'V', '22')});\n`);
+  def('sc_set_scale', (b) => `api.setScale(${v(b, 'V', '100')});\n`);
+  def('sc_change_scale', (b) => `api.changeScale(${v(b, 'V', '10')});\n`);
+  def('sc_set_wh', (b) => `api.setSize(${v(b, 'W', '100')}, ${v(b, 'H', '50')});\n`);
+  def('sc_set_ghost', (b) => `api.setGhost(${v(b, 'V')});\n`);
+  def('sc_set_shape', (b) => `api.setShape(${f(b, 'SHAPE')});\n`);
+  def('sc_front', () => 'api.front();\n');
+  def('sc_text', () => ['api.text()', Order.FUNCTION_CALL]);
+  def('sc_scale', () => ['api.scale()', Order.FUNCTION_CALL]);
+  def('sc_set_bg', (b) => `api.setBackground(${f(b, 'C')});\n`);
+  def('sc_mouse_x', () => ['api.mouseX()', Order.FUNCTION_CALL]);
+  def('sc_mouse_y', () => ['api.mouseY()', Order.FUNCTION_CALL]);
+  def('sc_mouse_down', () => ['api.mouseDown()', Order.FUNCTION_CALL]);
+  def('sc_touching_mouse', () => ['api.touchingMouse()', Order.FUNCTION_CALL]);
+  def('sc_screen_used', () => ['api.screenUsed()', Order.FUNCTION_CALL]);
+  def('sc_sprite_prop', (b) => [`api.spriteProp(${f(b, 'NAME')}, ${f(b, 'PROP')})`, Order.FUNCTION_CALL]);
+  def('sc_exit', () => 'api.exitScreen();\n');
 }
 
 /**
@@ -320,6 +423,12 @@ export const TOOLBOX = {
     },
     {
       kind: 'category',
+      name: 'Effekte',
+      colour: CATEGORY_COLOURS.effects,
+      contents: [block('bc_fx_set'), block('bc_fx_intensity', { V: n(150) }), block('bc_fx_burst', { V: n(1) }), block('bc_fx_is_on')],
+    },
+    {
+      kind: 'category',
       name: 'Steuerung',
       colour: CATEGORY_COLOURS.control,
       contents: [
@@ -374,9 +483,166 @@ export const TOOLBOX = {
         block('bc_show_text', { TEXT: t('Hallo!'), S: n(2) }),
         block('bc_teleport', { X: n(0), Y: n(0), Z: n(0) }),
         block('bc_obj_show'),
+        block('bc_set_weather', { I: n(1) }),
         block('bc_log', { V: t('Test') }),
       ],
     },
+  ],
+};
+
+// ---------- Toolboxen für Bildschirm-Figuren und die Bühne ----------
+
+const OPERATORS = {
+  kind: 'category',
+  name: 'Operatoren',
+  colour: CATEGORY_COLOURS.operators,
+  contents: [
+    block('math_arithmetic', { A: n(1), B: n(1) }),
+    block('math_random_int', { FROM: n(1), TO: n(10) }),
+    block('logic_compare', { A: n(0), B: n(0) }),
+    block('logic_operation'),
+    block('logic_negate'),
+    block('logic_boolean'),
+    block('math_number'),
+    block('math_round', { NUM: n(3.1) }),
+    block('math_modulo', { DIVIDEND: n(10), DIVISOR: n(3) }),
+    block('text'),
+    block('text_join'),
+    block('text_length', { VALUE: t('Hallo') }),
+    block('colour_picker'),
+  ],
+};
+
+const CONTROL = {
+  kind: 'category',
+  name: 'Steuerung',
+  colour: CATEGORY_COLOURS.control,
+  contents: [
+    block('bc_wait', { S: n(1) }),
+    block('controls_repeat_ext', { TIMES: n(10) }),
+    block('bc_forever'),
+    block('controls_if'),
+    block('controls_if', undefined, { extraState: { hasElse: true } }),
+    block('bc_wait_until'),
+    block('controls_whileUntil'),
+    block('bc_stop'),
+  ],
+};
+
+const screenEvents = (sprite: boolean) => ({
+  kind: 'category',
+  name: 'Ereignisse',
+  colour: CATEGORY_COLOURS.events,
+  contents: [
+    block('bc_when_start'),
+    block('sc_when_clicked'),
+    ...(sprite ? [block('sc_when_hover'), block('sc_when_unhover')] : []),
+    block('sc_when_use'),
+    block('sc_when_exit'),
+    block('bc_when_key'),
+    block('bc_when_tick'),
+    block('bc_when_message'),
+    block('bc_broadcast'),
+  ],
+});
+
+const screenSensing = (sprite: boolean) => ({
+  kind: 'category',
+  name: 'Fühlen',
+  colour: CATEGORY_COLOURS.sensing,
+  contents: [
+    ...(sprite ? [block('sc_touching_mouse')] : []),
+    block('sc_mouse_x'),
+    block('sc_mouse_y'),
+    block('sc_mouse_down'),
+    block('sc_screen_used'),
+    block('sc_sprite_prop'),
+    block('bc_key_down'),
+    block('bc_time'),
+  ],
+});
+
+const SCREEN_WORLD = {
+  kind: 'category',
+  name: 'Welt',
+  colour: CATEGORY_COLOURS.world,
+  contents: [
+    block('sc_exit'),
+    block('bc_show_text', { TEXT: t('Zugang gewährt'), S: n(2) }),
+    block('bc_obj_show'),
+    block('bc_teleport', { X: n(0), Y: n(0), Z: n(0) }),
+    block('bc_set_weather', { I: n(1) }),
+    block('bc_log', { V: t('Test') }),
+  ],
+};
+
+const VARIABLES = { kind: 'category', name: 'Variablen', colour: CATEGORY_COLOURS.variables, custom: 'VARIABLE' };
+
+export const SCREEN_SPRITE_TOOLBOX = {
+  kind: 'categoryToolbox',
+  contents: [
+    screenEvents(true),
+    {
+      kind: 'category',
+      name: 'Bewegung',
+      colour: CATEGORY_COLOURS.motion,
+      contents: [
+        block('sc_goto', { X: n(0), Y: n(0) }),
+        block('sc_glide', { S: n(1), X: n(0), Y: n(0) }),
+        block('sc_change_x', { V: n(10) }),
+        block('sc_set_x', { V: n(0) }),
+        block('sc_change_y', { V: n(10) }),
+        block('sc_set_y', { V: n(0) }),
+        block('sc_turn', { V: n(15) }),
+        block('sc_set_rot', { V: n(0) }),
+        block('sc_goto_mouse'),
+        block('sc_x'),
+        block('sc_y'),
+        block('sc_rot'),
+      ],
+    },
+    {
+      kind: 'category',
+      name: 'Aussehen',
+      colour: CATEGORY_COLOURS.looks,
+      contents: [
+        block('sc_say_for', { TEXT: t('Hallo!'), S: n(2) }),
+        block('sc_say', { TEXT: t('Hallo!') }),
+        block('sc_set_text', { TEXT: t('Text') }),
+        block('sc_set_color'),
+        block('sc_set_text_color'),
+        block('sc_set_font', { V: n(22) }),
+        block('sc_set_scale', { V: n(100) }),
+        block('sc_change_scale', { V: n(10) }),
+        block('sc_set_wh', { W: n(140), H: n(50) }),
+        block('sc_set_ghost', { V: n(50) }),
+        block('sc_set_shape'),
+        block('bc_show'),
+        block('bc_hide'),
+        block('sc_front'),
+        block('sc_set_bg'),
+        block('sc_text'),
+        block('sc_scale'),
+      ],
+    },
+    CONTROL,
+    screenSensing(true),
+    OPERATORS,
+    VARIABLES,
+    SCREEN_WORLD,
+  ],
+};
+
+export const SCREEN_STAGE_TOOLBOX = {
+  kind: 'categoryToolbox',
+  contents: [
+    screenEvents(false),
+    { kind: 'category', name: 'Aussehen', colour: CATEGORY_COLOURS.looks, contents: [block('sc_set_bg')] },
+    CONTROL,
+    screenSensing(false),
+    OPERATORS,
+    VARIABLES,
+    SCREEN_WORLD,
   ],
 };
 

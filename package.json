@@ -10,11 +10,14 @@
   },
   "dependencies": {
     "@blockly/field-colour": "^13.4.0",
+    "@dimforge/rapier3d-compat": "^0.21.0",
     "blockly": "^13.4.0",
-    "three": "^0.169.0"
+    "fast-png": "^7.0.1",
+    "fflate": "^0.8.3",
+    "three": "^0.186.1"
   },
   "devDependencies": {
-    "@types/three": "^0.169.0",
+    "@types/three": "^0.186.0",
     "typescript": "^5.6.3",
     "vite": "^5.4.11"
   }

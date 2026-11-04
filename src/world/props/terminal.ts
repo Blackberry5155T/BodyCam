@@ -11,6 +11,9 @@ import {
   MM_REGIONS,
   QUALITY_LABELS,
   SHADOW_LABELS,
+  REFLECTION_LABELS,
+  VOLUMETRIC_LABELS,
+  TERRAIN_LABELS,
   keyLabel,
   type Action,
   type Settings,
@@ -381,13 +384,17 @@ export class Terminal {
     const presets = QUALITY_LABELS.length - 1;
     const q = ui.select(x, 140, w, 'Qualität', QUALITY_LABELS, d.quality);
     if (q !== d.quality) this.settings.applyQuality(q >= presets ? (d.quality === 0 ? presets - 1 : 0) : q);
-    this.settings.set('shadows', ui.select(x, 196, w, 'Schatten', SHADOW_LABELS, d.shadows));
-    this.settings.set('renderScale', ui.slider('scale', x, 252, w, 'Auflösungsskala', d.renderScale, 0.5, 1.5, 0.25, pct));
-    this.settings.set('bloom', ui.toggle(x, 308, w, 'Bloom (Leuchten)', d.bloom));
-    this.settings.set('brightness', ui.slider('bright', x, 364, w, 'Helligkeit', d.brightness, 0.5, 1.6, 0.05, pct));
-    this.settings.set('fogEnabled', ui.toggle(x, 420, w, 'Nebel', d.fogEnabled));
-    this.settings.set('viewDistance', ui.slider('view', x, 476, w, 'Sichtweite (Nebel)', d.viewDistance, 5, 60, 1, (v) => `${v} m`));
-    ui.text('Auflösungsskala bezieht sich auf die Pixeldichte des Displays (max. 2x).', x, 556, 17, THEME.dim);
+    this.settings.set('shadows', ui.select(x, 194, w, 'Schatten', SHADOW_LABELS, d.shadows));
+    this.settings.set('renderScale', ui.slider('scale', x, 248, w, 'Auflösungsskala', d.renderScale, 0.5, 1.5, 0.25, pct));
+    this.settings.set('bloom', ui.toggle(x, 302, w, 'Bloom (Leuchten)', d.bloom));
+    this.settings.set('brightness', ui.slider('bright', x, 356, w, 'Helligkeit', d.brightness, 0.5, 1.6, 0.05, pct));
+    this.settings.set('fogEnabled', ui.toggle(x, 410, w, 'Nebel', d.fogEnabled));
+    const vs = this.settings.viewScale;
+    this.settings.set('viewDistance', ui.slider('view', x, 464, w, 'Sichtweite (Nebel)', d.viewDistance, 5, 60, 1, (v) => `${Math.round(v * vs)} m`));
+    this.settings.set('reflections', ui.select(x, 518, w, 'Spiegelungen (Pfützen)', REFLECTION_LABELS, d.reflections));
+    this.settings.set('volumetrics', ui.select(x, 572, w, 'Volumetrik (Nebel, Rauch, Feuer)', VOLUMETRIC_LABELS, d.volumetrics));
+    this.settings.set('terrainDetail', ui.select(x, 626, w, 'Terrain-Detail (Landschaft)', TERRAIN_LABELS, d.terrainDetail));
+    ui.text('Auflösungsskala bezieht sich auf die Pixeldichte des Displays (max. 2x).', x, 702, 17, THEME.dim);
   }
 
   private drawBodycam(x: number, w: number): void {

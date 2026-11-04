@@ -25,6 +25,14 @@ export interface OrientedBoxCollider {
   yaw: number; // Drehung um Y (rad), gleiche Konvention wie Object3D.rotation.y
 }
 
+/** Beliebig gedrehte Box (gekippte Rampen, schräge Objekte) — Kollision über Rapier exakt */
+export interface RotatedBoxCollider {
+  type: 'rbox';
+  center: THREE.Vector3;
+  half: THREE.Vector3;
+  quat: THREE.Quaternion;
+}
+
 export interface CylinderCollider {
   type: 'cylinder';
   center: THREE.Vector2; // xz
@@ -33,44 +41,46 @@ export interface CylinderCollider {
   maxY: number;
 }
 
-export type Collider = BoxCollider | OrientedBoxCollider | CylinderCollider;
+/** Höhenfeld (Landscape-Komponente): Mitte, Zellen, Höhen spaltenweise wie Rapier (h[x · (rows+1) + z]) */
+export interface HeightfieldCollider {
+  type: 'heightfield';
+  center: THREE.Vector3;
+  /** Zellen entlang Z (Zeilen) und X (Spalten) */
+  rows: number;
+  cols: number;
+  heights: Float32Array;
+  sizeX: number;
+  sizeZ: number;
+  minY: number;
+  maxY: number;
+}
+
+/** Dreiecksnetz in Weltkoordinaten (Landscape-Komponenten mit Löchern, später Brushes/Modelle) */
+export interface TrimeshCollider {
+  type: 'trimesh';
+  vertices: Float32Array;
+  indices: Uint32Array;
+  minY: number;
+  maxY: number;
+}
+
+export type Collider = BoxCollider | OrientedBoxCollider | RotatedBoxCollider | CylinderCollider | HeightfieldCollider | TrimeshCollider;
+
+const _m3 = new THREE.Matrix3();
+const _m4 = new THREE.Matrix4();
+/** halbe Höhe der achsenparallelen Hülle einer gedrehten Box */
+function rboxExtentY(c: RotatedBoxCollider): number {
+  const e = _m3.setFromMatrix4(_m4.makeRotationFromQuaternion(c.quat)).elements;
+  // Zeile 2 der Rotationsmatrix (column-major: e[1], e[4], e[7])
+  return Math.abs(e[1]) * c.half.x + Math.abs(e[4]) * c.half.y + Math.abs(e[7]) * c.half.z;
+}
 
 export function colliderMinY(c: Collider): number {
+  if (c.type === 'rbox') return c.center.y - rboxExtentY(c);
   return c.type === 'box' ? c.min.y : c.type === 'obox' ? c.center.y - c.half.y : c.minY;
 }
 
 export function colliderMaxY(c: Collider): number {
+  if (c.type === 'rbox') return c.center.y + rboxExtentY(c);
   return c.type === 'box' ? c.max.y : c.type === 'obox' ? c.center.y + c.half.y : c.maxY;
-}
-
-const out = { dx: 0, dz: 0, distSq: 0 };
-
-/**
- * Abstand (XZ) eines Punkts zur Grundfläche des Colliders.
- * Liefert den Vektor vom nächsten Punkt der Fläche zum Punkt (Welt-Koordinaten).
- * Für Zylinder ist der Abstand zum Mittelpunkt gemeint (Radius nicht abgezogen).
- */
-export function closestXZ(c: Collider, x: number, z: number): { dx: number; dz: number; distSq: number } {
-  if (c.type === 'box') {
-    out.dx = x - THREE.MathUtils.clamp(x, c.min.x, c.max.x);
-    out.dz = z - THREE.MathUtils.clamp(z, c.min.z, c.max.z);
-  } else if (c.type === 'obox') {
-    const cos = Math.cos(c.yaw);
-    const sin = Math.sin(c.yaw);
-    const wx = x - c.center.x;
-    const wz = z - c.center.z;
-    // Welt -> lokal (inverse Drehung um Y)
-    const lx = wx * cos - wz * sin;
-    const lz = wx * sin + wz * cos;
-    const ex = lx - THREE.MathUtils.clamp(lx, -c.half.x, c.half.x);
-    const ez = lz - THREE.MathUtils.clamp(lz, -c.half.z, c.half.z);
-    // lokal -> Welt
-    out.dx = ex * cos + ez * sin;
-    out.dz = -ex * sin + ez * cos;
-  } else {
-    out.dx = x - c.center.x;
-    out.dz = z - c.center.y;
-  }
-  out.distSq = out.dx * out.dx + out.dz * out.dz;
-  return out;
 }

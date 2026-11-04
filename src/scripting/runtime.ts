@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { Collider } from '../world/collision.ts';
 import { SCALE } from '../world/collision.ts';
 import { refreshColliders, type MapNode } from '../world/mapLoader.ts';
+import { isWeatherType, type WeatherType } from '../world/weather.ts';
 
 // Script-Runtime für Map-Objekte. Die Blöcke aus dem Editor werden zu JavaScript übersetzt
 // (scripting/blocks.ts), das hier gegen eine kleine API pro Objekt läuft:
@@ -16,7 +17,11 @@ export interface RuntimeHost {
   teleportPlayer(feet: THREE.Vector3, yawDeg?: number): void;
   showMessage(text: string, seconds: number): void;
   keyDown(code: string): boolean;
+  /** Wetter wechseln (weich überblendet) */
+  setWeather?(type: WeatherType, intensity: number): void;
   log?(msg: string, isError: boolean): void;
+  /** Jede Nachricht (auch an Bildschirme weiterreichen) */
+  onBroadcast?(msg: string): void;
 }
 
 interface Handler {
@@ -203,7 +208,14 @@ export class ScriptRuntime {
     for (const s of this.scripts) for (const h of s.handlers) if (h.event === 'key' && h.arg === code) this.run(s, h);
   }
 
+  /** Objekt per Name zeigen/verstecken (für Bildschirm-Scripts) */
+  setObjectVisible(name: string, show: boolean): void {
+    const n = this.nodesByName.get(String(name));
+    if (n) n.root.visible = !!show;
+  }
+
   broadcast(msg: string): void {
+    this.host.onBroadcast?.(msg);
     for (const s of this.scripts) for (const h of s.handlers) if (h.event === 'message' && h.arg === msg) this.run(s, h);
   }
 
@@ -285,6 +297,7 @@ export class ScriptRuntime {
       return meshes.map((m) => m.material as THREE.MeshStandardMaterial).filter((m) => m.isMeshStandardMaterial);
     };
     const light = () => node.instance?.light;
+    const fx = () => node.instance?.effect;
     const other = (name: string) => this.nodesByName.get(String(name)) ?? null;
 
     return {
@@ -358,10 +371,21 @@ export class ScriptRuntime {
       lightColor: (c: string) => light()?.setColor(c),
       lightFlicker: (on: boolean) => light()?.setFlicker(!!on),
       lightIsOn: () => light()?.isOn() ?? false,
+      // Effekte (Feuer, Rauch, Funken)
+      fxSet: (mode: 'on' | 'off' | 'toggle') => {
+        const e = fx();
+        if (e) e.setOn(mode === 'toggle' ? !e.on : mode === 'on');
+      },
+      fxIntensity: (v: unknown) => fx()?.setIntensity(Math.min(3, Math.max(0, num(v) / 100))),
+      fxBurst: (v: unknown) => fx()?.burst(Math.min(5, Math.max(0, num(v)))),
+      fxIsOn: () => fx()?.on ?? false,
       // Ereignisse & Welt
       broadcast: (msg: unknown) => this.broadcast(String(msg)),
       teleportPlayer: (x: unknown, y: unknown, z: unknown) => this.host.teleportPlayer(new THREE.Vector3(num(x), num(y), num(z))),
       showText: (text: unknown, sec: unknown) => this.host.showMessage(String(text), num(sec)),
+      setWeather: (type: unknown, intensity: unknown) => {
+        if (isWeatherType(type)) this.host.setWeather?.(type, THREE.MathUtils.clamp(num(intensity), 0, 2));
+      },
       log: (v: unknown) => this.host.log?.(`[${node.data.name}] ${String(v)}`, false),
       // Fühlen
       distanceToPlayer: () => {

@@ -210,6 +210,8 @@ export function dialog(title: string, body: HTMLElement | string, actions: { lab
       if (primary) {
         e.preventDefault();
         e.stopPropagation();
+        // Zahlenfelder übernehmen ihren Wert beim Verlassen — vor der Aktion, sonst gilt der alte Wert
+        (document.activeElement as HTMLElement | null)?.blur?.();
         if (primary.action?.() !== false) close();
       }
     }

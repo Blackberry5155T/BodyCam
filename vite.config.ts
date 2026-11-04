@@ -41,7 +41,12 @@ export default defineConfig({
   server: {
     port: 5173,
   },
+  // ES2022: Top-Level-await (Rapier/WASM wird vor dem Spielstart geladen)
+  optimizeDeps: { esbuildOptions: { target: 'es2022' } },
+  // Web Worker (Landscape-Erosion) als ES-Modul
+  worker: { format: 'es' },
   build: {
+    target: 'es2022',
     rollupOptions: {
       input: {
         main: resolve('index.html'),

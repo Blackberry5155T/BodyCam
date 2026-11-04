@@ -5,12 +5,20 @@ import { Outliner } from './outliner.ts';
 import { DetailsPanel } from './details.ts';
 import { ContentBrowser } from './content.ts';
 import { ScriptEditor } from './scriptEditor.ts';
+import { ScreenEditor } from './screenEditor.ts';
+import { SCREEN_TYPE, defaultScreen } from '../world/screen.ts';
 import { icon } from './icons.ts';
 import { closeMenus, confirmDialog, dialog, h, initSplitters, isMenuOpen, pickFile, promptText, showMenu, toast, type MenuItem } from './ui.ts';
 import { ASSETS, CATEGORIES, PRESETS, defaultProps, type AssetPreset } from '../world/assets.ts';
 import { emptyMap, normalizeMap, type MapData, type MapObjectData } from '../world/mapFormat.ts';
-import { deleteLocalMap, exportMapFile, importMapFile, listLocalMaps, loadLocalMap, saveLocalMap } from '../world/mapStore.ts';
+import { collectBlobGarbage, deleteLocalMap, exportMapJson, exportMapPackage, importMapFile, listLocalMaps, loadLocalMap, requestPersistentStorage, saveLocalMap } from '../world/mapStore.ts';
+import { MODE_ORDER, ModeManager } from './modes/index.ts';
 import { MAPS } from '../maps/index.ts';
+import { SUN_TYPE, writeSunToObject } from '../world/sun.ts';
+import { WEATHER_TYPE, writeWeatherToObject } from '../world/weatherObject.ts';
+import { clearLandscapeCache, flushLandscapes } from '../world/landscape/asset.ts';
+import { browserBlobs } from '../world/blobStore.ts';
+import { createLandscapeMode } from './modes/landscape.ts';
 
 // Einstieg des Map-Editors (editor.html). Verdrahtet Zustand, Viewport, Panels, Menüs und Tastenkürzel.
 
@@ -41,12 +49,39 @@ const outliner = new Outliner(document.getElementById('outliner')!, state);
 const details = new DetailsPanel(document.getElementById('details')!, state);
 const content = new ContentBrowser(document.getElementById('content')!);
 const scriptEditor = new ScriptEditor();
+const screenEditor = new ScreenEditor();
+details.onCreateSun = () => {
+  const p = PRESETS.find((x) => x.type === SUN_TYPE);
+  if (!p) return;
+  placePreset(p);
+  details.setTab('details');
+};
+details.onCreateWeather = () => {
+  const p = PRESETS.find((x) => x.type === WEATHER_TYPE);
+  if (!p) return;
+  placePreset(p);
+  details.setTab('details');
+};
+details.onSunFromCamera = () => {
+  viewport.sunFromCamera();
+  status('Sonne auf Kamerablick ausgerichtet');
+};
 initSplitters();
+
+// Editor-Modi (Auswahl, Landscape, Foliage, …); Werkzeug-Panel liegt über der Details-Spalte
+const modes = new ModeManager({ state, viewport, status: (m, err) => status(m, err) }, document.getElementById('details')!);
+modes.register(createLandscapeMode({ state, viewport, status: (m, err) => status(m, err) }));
+
+/** Geänderte Landscape-Höhendaten als Blobs schreiben (vor Speichern/Export) */
+async function flushData(): Promise<void> {
+  await flushLandscapes(state.map.objects, (b) => browserBlobs.put(b));
+}
 
 // ---------- Map laden / speichern ----------
 
 function loadMapData(map: MapData): void {
   if (viewport.simulating) viewport.stopSimulation();
+  clearLandscapeCache();
   state.load(normalizeMap(structuredClone(map)));
   localStorage.setItem(LAST_KEY, state.map.name);
   viewport.applyWorld();
@@ -57,10 +92,13 @@ async function confirmDiscard(): Promise<boolean> {
   return !state.dirty || confirmDialog('Ungespeicherte Änderungen', `„${state.map.name}“ hat ungespeicherte Änderungen. Verwerfen?`, 'Verwerfen', true);
 }
 
-function save(): boolean {
+let persistAsked = false;
+
+async function save(): Promise<boolean> {
   if (viewport.simulating) viewport.stopSimulation();
   try {
-    saveLocalMap(state.map);
+    await flushData();
+    await saveLocalMap(state.map);
   } catch (e) {
     toast((e as Error).message, 'error', 6000);
     return false;
@@ -68,17 +106,22 @@ function save(): boolean {
   localStorage.setItem(LAST_KEY, state.map.name);
   state.markSaved();
   status(`„${state.map.name}“ im Browser gespeichert`);
+  // Einmal pro Sitzung: Browser bitten, IndexedDB nicht bei Platzmangel zu räumen
+  if (!persistAsked) {
+    persistAsked = true;
+    void requestPersistentStorage();
+  }
   return true;
 }
 
 async function saveAs(): Promise<void> {
   const name = await promptText('Speichern unter', 'Name der Map:', state.map.name);
   if (!name) return;
-  if (name !== state.map.name && listLocalMaps().some((m) => m.name === name)) {
+  if (name !== state.map.name && (await listLocalMaps()).some((m) => m.name === name)) {
     if (!(await confirmDialog('Überschreiben?', `Es gibt bereits eine Map „${name}“. Überschreiben?`, 'Überschreiben', true))) return;
   }
   state.map.name = name;
-  if (save()) toast(`Gespeichert als „${name}“`, 'ok');
+  if (await save()) toast(`Gespeichert als „${name}“`, 'ok');
 }
 
 async function newMap(): Promise<void> {
@@ -90,13 +133,21 @@ async function newMap(): Promise<void> {
     const p = PRESETS.find((x) => x.id === preset)!;
     return { id: `${preset}-1`, name: p.label, type: p.type, pos, rot: [0, 0, 0], scale: p.scale ?? [1, 1, 1], props: defaultProps(p.type, p.props) };
   };
-  map.objects.push({ ...obj('floor', [0, -0.05, 0]), scale: [20, 0.1, 20] }, obj('spawn', [0, 0, 4]));
+  const sun = { ...obj('sun', [0, 6, 0]), name: 'Sonne' };
+  writeSunToObject(map.world, sun);
+  map.objects.push({ ...obj('floor', [0, -0.05, 0]), scale: [20, 0.1, 20] }, obj('spawn', [0, 0, 4]), sun);
   loadMapData(map);
   state.dirty = true;
   state.emit('meta');
 }
 
-function openDialog(): void {
+async function openDialog(): Promise<void> {
+  let maps: Awaited<ReturnType<typeof listLocalMaps>> = [];
+  try {
+    maps = await listLocalMaps();
+  } catch (e) {
+    toast(`Browser-Speicher nicht lesbar: ${(e as Error).message}`, 'error', 6000);
+  }
   const list = h('div', { class: 'map-list' });
   let close = () => {};
   const entry = (label: string, when: string, load: () => void, del?: () => void) => {
@@ -118,28 +169,28 @@ function openDialog(): void {
     }
     list.append(row);
   };
-  for (const m of listLocalMaps()) {
-    entry(m.name, new Date(m.updated).toLocaleString('de-DE'), () => {
-      const map = loadLocalMap(m.name);
+  for (const m of maps) {
+    entry(m.name, new Date(m.updated).toLocaleString('de-DE'), async () => {
+      const map = await loadLocalMap(m.name);
       if (map) loadMapData(map);
       else toast('Map konnte nicht geladen werden', 'error');
-    }, () => deleteLocalMap(m.name));
+    }, () => void deleteLocalMap(m.name));
   }
   entry('Startmap (mitgeliefert, src/maps/start.json)', 'Vorlage', () => loadMapData(MAPS.start));
   const body = h('div', {}, h('div', { style: 'color:var(--text-dim)' }, 'Im Browser gespeicherte Maps:'), list);
   close = dialog('Map öffnen', body, [
     {
-      label: 'JSON importieren…',
+      label: 'Importieren (.bcmap/.json)…',
       action: () => {
-        void importJson();
+        void importFile();
       },
     },
     { label: 'Schließen', primary: true },
   ]);
 }
 
-async function importJson(): Promise<void> {
-  const file = await pickFile('.json,application/json');
+async function importFile(): Promise<void> {
+  const file = await pickFile('.bcmap,.zip,.json,application/json');
   if (!file || !(await confirmDiscard())) return;
   try {
     const map = await importMapFile(file);
@@ -152,8 +203,29 @@ async function importJson(): Promise<void> {
   }
 }
 
-function play(): void {
-  if (!save()) return;
+async function exportPackage(): Promise<void> {
+  if (viewport.simulating) viewport.stopSimulation();
+  status('Paket wird erstellt …');
+  try {
+    await flushData();
+    await exportMapPackage(state.map);
+    status(`„${state.map.name}.bcmap“ exportiert`);
+  } catch (e) {
+    toast((e as Error).message, 'error', 6000);
+  }
+}
+
+async function exportJson(): Promise<void> {
+  try {
+    await flushData();
+    exportMapJson(state.map);
+  } catch (e) {
+    toast((e as Error).message, 'error', 6000);
+  }
+}
+
+async function play(): Promise<void> {
+  if (!(await save())) return;
   if (!state.map.objects.some((o) => o.type === 'spawn')) toast('Kein Player Start in der Map — Spieler startet bei 0/0/0', 'info', 4000);
   window.open(`index.html?map=local:${encodeURIComponent(state.map.name)}`, 'bodycam-play');
   status('Spiel geöffnet (Tab „bodycam-play“) — erneutes Speichern lädt es automatisch neu');
@@ -167,7 +239,23 @@ function toggleSimulation(): void {
 // ---------- Objekte ----------
 
 function objectFromPreset(p: AssetPreset): MapObjectData {
-  return { id: '', name: p.label, type: p.type, pos: [0, 0, 0], rot: p.rot ?? [0, 0, 0], scale: p.scale ?? [1, 1, 1], props: defaultProps(p.type, p.props) };
+  const o: MapObjectData = { id: '', name: p.label, type: p.type, pos: [0, 0, 0], rot: p.rot ?? [0, 0, 0], scale: p.scale ?? [1, 1, 1], props: defaultProps(p.type, p.props) };
+  // Neue Sonne übernimmt den bisherigen Sonnenstand + Licht aus den World Settings
+  if (o.type === SUN_TYPE) {
+    o.name = 'Sonne';
+    writeSunToObject(state.map.world, o);
+  }
+  // Neues Wetter-Objekt übernimmt die bisherigen Wetter-Werte; "klar" wäre beim Platzieren nicht sichtbar → Regen
+  if (o.type === WEATHER_TYPE) {
+    o.name = 'Wetter';
+    writeWeatherToObject(state.map.world, o);
+    if (o.props.weather === 'klar') o.props.weather = 'regen';
+  }
+  if (o.type === SCREEN_TYPE) {
+    o.name = 'Bildschirm';
+    o.screen = defaultScreen();
+  }
+  return o;
 }
 
 function uniqueConflict(type: string): boolean {
@@ -184,9 +272,11 @@ function placePreset(p: AssetPreset): void {
   const [o] = state.add([objectFromPreset(p)], false);
   if (!o) return;
   const hit = viewport.centerPoint();
+  if (o.type === SUN_TYPE || o.type === WEATHER_TYPE) hit.point.y += 4; // schwebt, Position ist egal
   viewport.placeOnSurface(o.id, hit.point, hit.normal);
   state.commit();
   status(`„${o.name}“ hinzugefügt`);
+  if (o.type === SCREEN_TYPE) editScreen(o.id);
 }
 content.onPlace = placePreset;
 
@@ -228,10 +318,15 @@ viewportEl.addEventListener('drop', (e) => {
     if (p) uniqueConflict(p.type);
     return;
   }
-  const name = state.get(ghost.id)?.name;
+  const placed = state.get(ghost.id);
+  const name = placed?.name;
   ghost = null;
   state.commit();
   status(`„${name}“ platziert`);
+  if (placed?.type === SCREEN_TYPE) {
+    editScreen(placed.id);
+    return;
+  }
   viewportEl.querySelector('canvas')?.focus();
 });
 window.addEventListener('dragend', () => cancelGhost());
@@ -250,6 +345,19 @@ function editScript(id: string): void {
   });
 }
 details.onEditScript = editScript;
+
+function editScreen(id: string): void {
+  const obj = state.get(id);
+  if (!obj || obj.type !== SCREEN_TYPE || viewport.simulating) return;
+  screenEditor.open(obj, (screen) => {
+    state.update(() => {
+      const o = state.get(id);
+      if (o) o.screen = screen;
+    });
+    status(`Bildschirm „${obj.name}“ gespeichert — ▶ Simulieren zum Ausprobieren`);
+  });
+}
+details.onEditScreen = editScreen;
 
 function deleteSelected(): void {
   const n = state.selection.length;
@@ -281,6 +389,7 @@ function contextItems(): MenuItem[] {
     { label: 'Fokussieren', key: 'F', disabled: !has, action: () => viewport.focus(state.selection) },
     { label: 'Umbenennen', key: 'F2', disabled: !has, action: () => sel && outliner.rename(sel.id) },
     { label: sel?.script ? 'Script bearbeiten' : 'Script hinzufügen', icon: 'script', disabled: !has, action: () => sel && editScript(sel.id) },
+    ...(sel?.type === SCREEN_TYPE ? [{ label: 'Bildschirm programmieren', icon: 'monitor', action: () => editScreen(sel.id) }] : []),
     { separator: true },
     { label: 'Kopieren', key: 'Strg+C', disabled: !has, action: () => state.copy() },
     { label: 'Einfügen', key: 'Strg+V', action: () => state.paste() },
@@ -316,14 +425,15 @@ const mapTitle = h('div', { class: 'map-title' });
 const menus: Record<string, () => MenuItem[]> = {
   Datei: () => [
     { label: 'Neue Map…', key: 'Strg+N', action: () => void newMap() },
-    { label: 'Öffnen…', key: 'Strg+O', icon: 'open', action: openDialog },
-    { label: 'Speichern', key: 'Strg+S', icon: 'save', action: save },
+    { label: 'Öffnen…', key: 'Strg+O', icon: 'open', action: () => void openDialog() },
+    { label: 'Speichern', key: 'Strg+S', icon: 'save', action: () => void save() },
     { label: 'Speichern unter…', key: 'Strg+Umsch+S', action: () => void saveAs() },
     { separator: true },
-    { label: 'Als JSON exportieren', icon: 'download', action: () => exportMapFile(state.map) },
-    { label: 'JSON importieren…', icon: 'upload', action: () => void importJson() },
+    { label: 'Als Paket exportieren (.bcmap)', icon: 'download', action: () => void exportPackage() },
+    { label: 'Als JSON exportieren (ohne Binär-Daten)', icon: 'download', action: exportJson },
+    { label: 'Importieren (.bcmap/.json)…', icon: 'upload', action: () => void importFile() },
     { separator: true },
-    { label: 'Im Spiel testen', key: 'Alt+P', icon: 'play', action: play },
+    { label: 'Im Spiel testen', key: 'Alt+P', icon: 'play', action: () => void play() },
   ],
   Bearbeiten: () => [
     { label: 'Rückgängig', key: 'Strg+Z', disabled: !state.canUndo, action: () => state.undo() },
@@ -388,16 +498,35 @@ const tb = (label: string, ic: string, title: string, action: () => void, cls = 
   b.addEventListener('click', action);
   return b;
 };
-const btnPlay = tb('Spielen', 'play', 'Map speichern und im Spiel öffnen (Alt+P)', play, 'tb-play');
+const btnPlay = tb('Spielen', 'play', 'Map speichern und im Spiel öffnen (Alt+P)', () => void play(), 'tb-play');
 const btnSim = tb('Simulieren', 'simulate', 'Scripts im Editor laufen lassen (Alt+S)', toggleSimulation, 'tb-play');
 const btnStop = tb('', 'stop', 'Simulation beenden (Esc)', () => viewport.stopSimulation(), 'tb-stop');
 const btnUndo = tb('', 'rotate', 'Rückgängig (Strg+Z)', () => state.undo());
 btnUndo.style.transform = 'scaleX(-1)';
 const btnRedo = tb('', 'rotate', 'Wiederholen (Strg+Y)', () => state.redo());
 const addBtn = tb('Hinzufügen', 'plus', 'Asset hinzufügen', () => showMenu(addMenuItems(), addBtn));
+const modeBtn = tb('', 'select', 'Editor-Modus (Umschalt+1…6)', () =>
+  showMenu(
+    MODE_ORDER.map((id, i): MenuItem => {
+      const m = modes.modes.get(id)!;
+      return { label: m.label, icon: m.icon, key: `Umsch+${i + 1}`, checked: modes.active.id === id, action: () => modes.set(id) };
+    }),
+    modeBtn,
+  ),
+  'tb-mode',
+);
+const showModeButton = () => {
+  const m = modes.active;
+  modeBtn.innerHTML = `${icon(m.icon)}<span>${m.label}</span><span class="caret">▾</span>`;
+  modeBtn.classList.toggle('active', m.id !== 'select');
+};
+modes.onChange(showModeButton);
+showModeButton();
 document.getElementById('toolbar')!.append(
-  tb('Speichern', 'save', 'Im Browser speichern (Strg+S)', save),
-  tb('Öffnen', 'open', 'Map öffnen (Strg+O)', openDialog),
+  modeBtn,
+  h('div', { class: 'tb-sep' }),
+  tb('Speichern', 'save', 'Im Browser speichern (Strg+S)', () => void save()),
+  tb('Öffnen', 'open', 'Map öffnen (Strg+O)', () => void openDialog()),
   h('div', { class: 'tb-sep' }),
   addBtn,
   tb('Script', 'script', 'Blöcke des ausgewählten Objekts bearbeiten', () => state.primary && editScript(state.primary.id)),
@@ -407,7 +536,7 @@ document.getElementById('toolbar')!.append(
   h('div', { class: 'tb-spacer' }),
   h('div', { class: 'tb-group' }, btnPlay, btnSim, btnStop),
   h('div', { class: 'tb-spacer' }),
-  tb('Export', 'download', 'Map als JSON-Datei herunterladen', () => exportMapFile(state.map)),
+  tb('Export', 'download', 'Map als Paket (.bcmap) herunterladen', () => void exportPackage()),
 );
 viewport.onSimulationChange = updateToolbar;
 
@@ -538,6 +667,7 @@ function showShortcuts(): void {
     ['F2', 'Umbenennen'],
     ['H / Strg + H', 'Ausblenden / Alle einblenden'],
     ['G', 'Spielansicht (Editor-Hilfen aus)'],
+    ['Strg + L halten + Maus', 'Sonne drehen'],
     ['Strg + Z / Y', 'Rückgängig / Wiederholen'],
     ['Strg + S', 'Speichern'],
     ['Alt + P', 'Im Spiel testen'],
@@ -563,7 +693,7 @@ function showScriptHelp(): void {
 
 window.addEventListener('keydown', (e) => {
   const t = e.target as HTMLElement;
-  if (scriptEditor.isOpen || document.querySelector('.modal-back:not(.hidden)')) return;
+  if (scriptEditor.isOpen || screenEditor.isOpen || document.querySelector('.modal-back:not(.hidden)')) return;
   if (t.closest('input, select, textarea, .blocklyWidgetDiv')) return;
   const ctrl = e.ctrlKey || e.metaKey;
   const key = e.code;
@@ -573,8 +703,8 @@ window.addEventListener('keydown', (e) => {
   };
 
   if (ctrl) {
-    if (key === 'KeyS') return run(() => (e.shiftKey ? void saveAs() : save()));
-    if (key === 'KeyO') return run(openDialog);
+    if (key === 'KeyS') return run(() => void (e.shiftKey ? saveAs() : save()));
+    if (key === 'KeyO') return run(() => void openDialog());
     if (key === 'KeyN') return run(() => void newMap());
     if (key === 'KeyZ') return run(() => (e.shiftKey ? state.redo() : state.undo()));
     if (key === 'KeyY') return run(() => state.redo());
@@ -589,7 +719,7 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (e.altKey) {
-    if (key === 'KeyP') return run(play);
+    if (key === 'KeyP') return run(() => void play());
     if (key === 'KeyS') return run(toggleSimulation);
     return;
   }
@@ -598,6 +728,7 @@ window.addEventListener('keydown', (e) => {
     if (key === 'Escape') run(() => viewport.stopSimulation());
     return;
   }
+  if (modes.key(e)) return run(() => {});
   switch (key) {
     case 'Escape':
       return run(() => state.select([]));
@@ -632,8 +763,26 @@ window.addEventListener('keydown', (e) => {
 // ---------- Start ----------
 
 const last = localStorage.getItem(LAST_KEY);
-const lastMap = last ? loadLocalMap(last) : null;
+const lastMap = last ? await loadLocalMap(last) : null;
 loadMapData(lastMap ?? MAPS.start);
 updateCount();
 status(lastMap ? `„${lastMap.name}“ geladen` : 'Startmap geladen — Strg+S speichert sie im Browser, ▶ Spielen testet sie im Spiel');
 void details;
+
+// Binär-Daten aufräumen, auf die keine gespeicherte Map mehr verweist. Nur beim Start (die Undo-Historie dieser
+// Sitzung ist noch leer) und nur, wenn kein anderer Editor-Tab offen ist — der könnte importierte, noch nicht
+// gespeicherte Blobs brauchen. Jeder Editor-Tab hält dazu eine geteilte Sperre, solange er offen ist.
+async function collectGarbageIfAlone(): Promise<void> {
+  if (!navigator.locks) return;
+  await new Promise<void>((acquired) => {
+    void navigator.locks.request('bodycam-editor', { mode: 'shared' }, () => {
+      acquired();
+      return new Promise<never>(() => {});
+    });
+  });
+  const held = (await navigator.locks.query()).held ?? [];
+  if (held.filter((l) => l.name === 'bodycam-editor').length > 1) return;
+  const n = await collectBlobGarbage();
+  if (n) console.info(`${n} unbenutzte Binär-Datei(en) aus dem Browser-Speicher entfernt`);
+}
+collectGarbageIfAlone().catch((e) => console.warn('Aufräumen des Blob-Speichers fehlgeschlagen', e));

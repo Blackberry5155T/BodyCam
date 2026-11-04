@@ -7,10 +7,21 @@ import { OutlinePass } from 'three/examples/jsm/postprocessing/OutlinePass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import type { EditorState } from './state.ts';
 import type { AssetContext } from '../world/assets.ts';
+import { Weather, isWeatherType } from '../world/weather.ts';
 import { MapNode, WorldRig, applyTransform, buildInstance, createNode, nodeOf, readTransform } from '../world/mapLoader.ts';
 import { ScriptRuntime } from '../scripting/runtime.ts';
+import { ScreenRuntime } from '../scripting/screenRuntime.ts';
+import { SCREEN_PX, defaultScreen } from '../world/screen.ts';
+import type { ScreenSurface } from '../world/assets.ts';
 import { SCALE } from '../world/collision.ts';
+import { findSun, sunWorld, writeSunToObject } from '../world/sun.ts';
+import { findWeather, weatherWorld } from '../world/weatherObject.ts';
 import { h } from './ui.ts';
+import { volumeFX } from '../world/volumetrics.ts';
+import { VolumePass } from '../rendering/volumePass.ts';
+import type { ModeInput } from './modes/types.ts';
+import { browserBlobs } from '../world/blobStore.ts';
+import { updateLandscapes } from '../world/landscape/render.ts';
 
 // 3D-Viewport des Editors: Navigation wie in UE5 (RMT + WASD fliegen, MMT schieben, Alt+LMT orbit,
 // Mausrad vor/zurück), Gizmo (W/E/R), Auswahl mit Outline, Drag & Drop aus dem Content Browser.
@@ -18,9 +29,10 @@ import { h } from './ui.ts';
 export type GizmoMode = 'select' | 'translate' | 'rotate' | 'scale';
 export type ViewMode = 'lit' | 'bright' | 'wire';
 
-const CAMERA_SPEEDS = [0.5, 1, 2, 4, 7, 12, 20, 35];
+const CAMERA_SPEEDS = [0.5, 1, 2, 4, 7, 12, 20, 35, 60, 120, 250, 500];
 const HELPER_LAYER = 1;
 const EXPOSURE = 1.15;
+const _feet = new THREE.Vector3();
 
 interface Entry {
   node: MapNode;
@@ -45,7 +57,7 @@ export class Viewport {
   readonly container: HTMLElement;
   readonly renderer: THREE.WebGLRenderer;
   readonly scene = new THREE.Scene();
-  readonly camera = new THREE.PerspectiveCamera(70, 1, 0.05, 800);
+  readonly camera = new THREE.PerspectiveCamera(70, 1, 0.05, 4000);
   readonly ctx: AssetContext;
 
   mode: GizmoMode = 'translate';
@@ -66,6 +78,7 @@ export class Viewport {
   private mapGroup = new THREE.Group();
   private entries = new Map<string, Entry>();
   private world: WorldRig;
+  private weather: Weather;
   private fog = new THREE.Fog(0x000000, 1, 80);
   private grid = new THREE.Group();
   private composer: EffectComposer;
@@ -76,15 +89,28 @@ export class Viewport {
   private brightLight = new THREE.AmbientLight(0xffffff, 1.6);
   private selBoxes = new THREE.Group();
   private raycaster = new THREE.Raycaster();
-  private clock = new THREE.Clock();
+  private timer = new THREE.Timer();
   private keys = new Set<string>();
   private yaw = 0;
   private pitch = -0.3;
   private drag: Drag | null = null;
   private altDown = false;
+  private sunAdjust = false;
+  private simSunQuat = new THREE.Quaternion();
+  private simWeatherQuat = new THREE.Quaternion();
+  private sunMoved = false;
   private gizmoMoved = false;
   private dragStart: { pivot: THREE.Matrix4; nodes: { node: MapNode; matrix: THREE.Matrix4 }[] } | null = null;
   private runtime: ScriptRuntime | null = null;
+  /** Programmierbare Bildschirme während der Simulation */
+  private screens: { node: MapNode; rt: ScreenRuntime; surf: ScreenSurface }[] = [];
+  private screenHover: ScreenRuntime | null = null;
+  private screenPress: ScreenRuntime | null = null;
+  /** Eingaben des aktiven Editor-Modus (Landscape, Foliage …); null im Auswahl-Modus */
+  modeInput: ModeInput | null = null;
+  /** linke Maustaste gehört gerade dem Modus (Pinselstrich) */
+  private modeStroke = false;
+  private selectionEnabled = true;
   private simInfo: HTMLElement;
   private message: HTMLElement;
   private messageTimer = 0;
@@ -95,23 +121,24 @@ export class Viewport {
     private state: EditorState,
   ) {
     this.container = container;
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance', reversedDepthBuffer: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = EXPOSURE;
     this.renderer.autoClear = false;
     const canvas = this.renderer.domElement;
     canvas.tabIndex = 0;
     container.append(canvas);
-    this.ctx = { anisotropy: this.renderer.capabilities.getMaxAnisotropy(), editor: true };
+    this.ctx = { anisotropy: this.renderer.capabilities.getMaxAnisotropy(), editor: true, blobs: browserBlobs };
 
     this.camera.rotation.order = 'YXZ';
     this.camera.layers.enable(HELPER_LAYER);
     this.scene.add(this.camera, this.mapGroup);
     this.world = new WorldRig(state.map.world);
     this.scene.add(this.world.group);
+    this.weather = new Weather(this.renderer, this.scene, this.world);
 
     // Raster: 1-m-Linien + 10-m-Linien
     const minor = new THREE.GridHelper(400, 400, 0x3a3a3a, 0x3a3a3a);
@@ -129,9 +156,12 @@ export class Viewport {
     this.scene.add(this.grid);
 
     // Post-Processing: wie im Spiel (Bloom), dazu orange Auswahl-Outline wie in UE5
-    const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
+    // Tiefentextur für die Volumetrik (Nebel/Rauch/Feuer enden sauber an Geometrie)
+    const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4, depthTexture: new THREE.DepthTexture(1, 1, THREE.FloatType) });
     this.composer = new EffectComposer(this.renderer, rt);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.composer.addPass(new VolumePass(this.scene, this.camera));
+    volumeFX.setLamp(null);
     this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.55, 0.5, 1.0);
     this.composer.addPass(this.bloom);
     this.outline = new OutlinePass(new THREE.Vector2(1, 1), this.scene, this.camera);
@@ -166,7 +196,13 @@ export class Viewport {
       this.updateSelectionVisuals();
     });
     state.on('world', () => this.applyWorld());
-    state.on('transform', () => this.updateSelectionVisuals());
+    state.on('transform', () => {
+      this.updateSelectionVisuals();
+      // Sonnen-Objekt gedreht → Sonnenstand live nachziehen
+      const sun = findSun(this.state.map.objects);
+      const wo = findWeather(this.state.map.objects);
+      if ((sun && this.state.selection.includes(sun.id)) || (wo && this.state.selection.includes(wo.id))) this.applyWorld();
+    });
 
     this.camera.position.set(0, 8, 14);
     this.applyCamera();
@@ -187,7 +223,7 @@ export class Viewport {
       }
     }
     for (const o of objects) {
-      const propsKey = JSON.stringify([o.type, o.props]);
+      const propsKey = JSON.stringify([o.type, o.props, o.screen]);
       const scaleKey = o.scale.join(',');
       const xfKey = JSON.stringify([o.pos, o.rot, o.scale]);
       let e = this.entries.get(o.id);
@@ -200,7 +236,9 @@ export class Viewport {
       } else {
         const node = e.node;
         node.data = o;
-        const rebuild = e.propsKey !== propsKey || node.def !== undefined && node.def.rebuildOnScale && e.scaleKey !== scaleKey;
+        let rebuild = e.propsKey !== propsKey || (node.def !== undefined && node.def.rebuildOnScale && e.scaleKey !== scaleKey);
+        // Asset kann geänderte Eigenschaften selbst übernehmen (Landscape: Farben ohne Neuaufbau)
+        if (rebuild && e.scaleKey === scaleKey && node.instance?.updateProps?.(o)) rebuild = false;
         if (e.xfKey !== xfKey) applyTransform(node);
         if (rebuild) {
           buildInstance(node, this.ctx);
@@ -215,6 +253,7 @@ export class Viewport {
     }
     this.updateGizmo();
     this.updateSelectionVisuals();
+    this.applyWorld(); // Sonnen-Objekt kann sich geändert haben
   }
 
   private prepareNode(node: MapNode): void {
@@ -238,12 +277,35 @@ export class Viewport {
 
   applyWorld(): void {
     const w = this.state.map.world;
-    this.world.apply(w);
+    const sun = findSun(this.state.map.objects);
+    if (sun && this.runtime) {
+      // Simulation: Scripts dürfen die Sonne drehen, die Map-Daten bleiben unverändert
+      this.simSunQuat.copy(this.entries.get(sun.id)?.node.root.quaternion ?? this.simSunQuat);
+      this.world.apply(sunWorld(w, sun, this.simSunQuat));
+    } else {
+      // Sonnen-Objekt ist maßgeblich; World Settings spiegeln seine Werte
+      if (sun) Object.assign(w, sunWorld(w, sun));
+      this.world.apply(w);
+    }
     this.scene.background = new THREE.Color(w.background);
     this.fog.color.set(w.fogColor);
+    this.fog.far = Math.max(80, w.viewDistance ?? 80);
+    this.camera.far = Math.max(4000, this.fog.far * 1.5);
+    this.camera.updateProjectionMatrix();
     this.scene.fog = this.showFog ? this.fog : null;
     this.world.groundFog.visible = w.groundFog && this.showFog;
+    this.world.setFog(this.showFog);
     this.renderer.toneMappingExposure = EXPOSURE * w.exposure;
+    const wo = findWeather(this.state.map.objects);
+    if (wo && this.runtime) {
+      // Simulation: Scripts dürfen das Wetter-Objekt drehen (Wind), die Map-Daten bleiben unverändert
+      this.simWeatherQuat.copy(this.entries.get(wo.id)?.node.root.quaternion ?? this.simWeatherQuat);
+      this.weather.apply(weatherWorld(w, wo, this.simWeatherQuat));
+    } else {
+      // Wetter-Objekt ist maßgeblich; World Settings spiegeln seine Werte
+      if (wo) Object.assign(w, weatherWorld(w, wo));
+      this.weather.apply(w);
+    }
   }
 
   setViewMode(m: ViewMode): void {
@@ -281,6 +343,45 @@ export class Viewport {
     this.applyWorld();
   }
 
+  /** Sonne dorthin setzen, wohin die Kamera blickt */
+  sunFromCamera(): void {
+    const f = this.forward();
+    const w = this.state.map.world;
+    w.sunAzimuth = Math.round(THREE.MathUtils.radToDeg(Math.atan2(f.x, f.z)) * 10) / 10;
+    w.sunElevation = Math.round(THREE.MathUtils.clamp(THREE.MathUtils.radToDeg(Math.asin(f.y)), -89.5, 89.5) * 10) / 10;
+    this.pushSunToObject();
+    this.state.emit('world');
+    this.state.commit();
+  }
+
+  /** Sonnenstand aus den World Settings ins Sonnen-Objekt übernehmen (Drehung) */
+  private pushSunToObject(): void {
+    const sun = findSun(this.state.map.objects);
+    if (!sun) return;
+    writeSunToObject(this.state.map.world, sun);
+    const e = this.entries.get(sun.id);
+    if (!e) return;
+    applyTransform(e.node);
+    e.xfKey = JSON.stringify([sun.pos, sun.rot, sun.scale]);
+    this.updateGizmo();
+    this.state.emit('transform');
+  }
+
+  /** Strg+L halten + Maus bewegen: Sonne drehen (wie in UE5) */
+  private setSunAdjust(on: boolean): void {
+    if (this.sunAdjust === on) return;
+    this.sunAdjust = on;
+    this.container.classList.toggle('sun-adjust', on);
+    if (on) {
+      this.sunMoved = false;
+      this.onStatus?.('Sonne ausrichten: Maus bewegen, Strg+L loslassen zum Übernehmen');
+    } else if (this.sunMoved) {
+      this.state.commit();
+      const w = this.state.map.world;
+      this.onStatus?.(`Sonne: Richtung ${w.sunAzimuth}° · Höhe ${w.sunElevation}°`);
+    }
+  }
+
   setBloom(on: boolean): void {
     this.bloomEnabled = on;
     this.bloom.enabled = on;
@@ -309,12 +410,20 @@ export class Viewport {
 
   // ---------- Gizmo ----------
 
+  /** Editor-Modus erlaubt Auswahl/Gizmo (Auswahl-Modus) oder übernimmt die linke Maustaste (Pinsel-Modi) */
+  setSelectionEnabled(on: boolean): void {
+    if (on === this.selectionEnabled) return;
+    this.selectionEnabled = on;
+    this.updateGizmo();
+  }
+
   private updateGizmo(): void {
     if (this.dragStart) return;
     const nodes = this.selectedNodes().filter((n) => n.root.visible);
     const prim = nodes[nodes.length - 1];
     const scaleable = nodes.some((n) => !n.def.fixedScale);
-    if (!prim || this.mode === 'select' || this.state.simulating || (this.mode === 'scale' && !scaleable)) {
+    const rotatable = nodes.some((n) => !n.def.fixedRotation);
+    if (!prim || !this.selectionEnabled || this.mode === 'select' || this.state.simulating || (this.mode === 'scale' && !scaleable) || (this.mode === 'rotate' && !rotatable)) {
       this.gizmo.detach();
       return;
     }
@@ -359,6 +468,7 @@ export class Viewport {
       const oldScale = node.data.scale.join(',');
       m.decompose(node.root.position, node.root.quaternion, node.root.scale);
       if (node.def.fixedScale) node.root.scale.set(1, 1, 1);
+      if (node.def.fixedRotation) node.root.quaternion.identity();
       node.root.updateMatrixWorld(true);
       readTransform(node);
       const e = this.entries.get(node.data.id);
@@ -371,7 +481,7 @@ export class Viewport {
       if (e) {
         e.scaleKey = node.data.scale.join(',');
         e.xfKey = JSON.stringify([node.data.pos, node.data.rot, node.data.scale]);
-        e.propsKey = JSON.stringify([node.data.type, node.data.props]);
+        e.propsKey = JSON.stringify([node.data.type, node.data.props, node.data.screen]);
       }
     }
     this.state.emit('transform');
@@ -387,7 +497,7 @@ export class Viewport {
     for (const n of nodes) {
       let hasMesh = false;
       n.instance?.object.traverse((o) => {
-        if ((o as THREE.Mesh).isMesh) hasMesh = true;
+        if ((o as THREE.Mesh).isMesh && !n.instance?.object.userData.noOutline) hasMesh = true;
       });
       if (hasMesh && n.instance) meshes.push(n.instance.object);
       else {
@@ -462,6 +572,23 @@ export class Viewport {
     canvas.addEventListener('pointerdown', (e) => {
       canvas.focus();
       if (this.gizmo.dragging || (e.button === 0 && this.gizmo.axis !== null && this.gizmo.object)) return;
+      if (e.button === 0 && !e.altKey && !this.runtime && this.modeInput?.pointerDown?.(e)) {
+        this.modeStroke = true;
+        canvas.setPointerCapture(e.pointerId);
+        e.preventDefault();
+        return;
+      }
+      if (this.runtime && e.button === 0 && !e.altKey) {
+        const sc = this.screenAt(e.clientX, e.clientY);
+        if (sc) {
+          if (!sc.used) sc.enter();
+          sc.pointerDown();
+          this.screenPress = sc;
+          canvas.setPointerCapture(e.pointerId);
+          e.preventDefault();
+          return;
+        }
+      }
       let mode: Drag['mode'] = 'click';
       if (e.button === 2) mode = e.altKey ? 'dolly' : 'fly';
       else if (e.button === 1) mode = 'pan';
@@ -477,6 +604,8 @@ export class Viewport {
       e.preventDefault();
     });
     canvas.addEventListener('pointermove', (e) => {
+      if (this.runtime && this.screens.length && (!this.drag || this.drag.mode === 'click')) this.hoverScreens(e.clientX, e.clientY);
+      if (this.modeInput && !this.runtime && (this.modeStroke || !this.drag)) this.modeInput.pointerMove?.(e, this.modeStroke);
       const d = this.drag;
       if (!d) return;
       const dx = e.movementX;
@@ -497,11 +626,26 @@ export class Viewport {
         this.camera.position.addScaledVector(this.forward(), dx * 0.01 * speed);
       }
     });
+    canvas.addEventListener('pointerleave', () => {
+      if (!this.modeStroke) this.modeInput?.pointerLeave?.();
+    });
     canvas.addEventListener('pointerup', (e) => {
+      if (this.modeStroke) {
+        this.modeStroke = false;
+        this.modeInput?.pointerUp?.(e);
+        return;
+      }
+      if (this.screenPress) {
+        this.screenPress.pointerUp();
+        this.screenPress = null;
+        return;
+      }
       const d = this.drag;
       this.drag = null;
       if (!d) return;
-      if (d.moved < 4 && d.mode === 'click') this.clickSelect(e, d);
+      if (d.moved < 4 && d.mode === 'click') {
+        if (this.selectionEnabled || this.runtime) this.clickSelect(e, d);
+      }
       else if (d.moved < 4 && d.mode === 'fly') {
         const node = this.pick(e.clientX, e.clientY);
         if (node && !this.state.selection.includes(node.data.id)) this.state.select([node.data.id]);
@@ -510,6 +654,7 @@ export class Viewport {
     });
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
+      if (!this.isFlying && !this.runtime && this.modeInput?.wheel?.(e)) return;
       if (this.isFlying) {
         this.speedIndex = THREE.MathUtils.clamp(this.speedIndex + (e.deltaY < 0 ? 1 : -1), 0, CAMERA_SPEEDS.length - 1);
         this.onStatus?.(`Kamerageschwindigkeit ${this.speedIndex + 1} (${this.cameraSpeed} m/s)`);
@@ -518,11 +663,31 @@ export class Viewport {
       }
     }, { passive: false });
     window.addEventListener('keydown', (e) => {
+      if (e.code === 'KeyL' && (e.ctrlKey || e.metaKey) && !this.runtime && !(e.target as HTMLElement).closest?.('input, select, textarea')) {
+        e.preventDefault(); // sonst springt der Browser in die Adressleiste
+        this.setSunAdjust(true);
+      }
       this.keys.add(e.code);
-      if (this.runtime && !e.repeat && document.activeElement === canvas) this.runtime.keyPressed(e.code);
+      if (this.runtime && !e.repeat && document.activeElement === canvas) {
+        this.runtime.keyPressed(e.code);
+        for (const sc of this.screens) sc.rt.keyPressed(e.code);
+      }
     });
-    window.addEventListener('keyup', (e) => this.keys.delete(e.code));
+    window.addEventListener('keyup', (e) => {
+      this.keys.delete(e.code);
+      if (e.code === 'KeyL' || e.key === 'Control' || e.key === 'Meta') this.setSunAdjust(false);
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (!this.sunAdjust || (!e.movementX && !e.movementY)) return;
+      const w = this.state.map.world;
+      w.sunAzimuth = Math.round((((w.sunAzimuth + e.movementX * 0.25) % 360) + 360) % 360 * 10) / 10;
+      w.sunElevation = Math.round(THREE.MathUtils.clamp(w.sunElevation - e.movementY * 0.25, -20, 89.5) * 10) / 10;
+      this.sunMoved = true;
+      this.pushSunToObject();
+      this.state.emit('world');
+    });
     window.addEventListener('blur', () => {
+      this.setSunAdjust(false);
       this.keys.clear();
       this.drag = null;
     });
@@ -554,6 +719,31 @@ export class Viewport {
       if (!c.visible || c.userData.noPick) return false;
     }
     return true;
+  }
+
+  /** Bildschirm-Fläche unter dem Mauszeiger (Simulation), setzt dessen Cursor */
+  private screenAt(x: number, y: number): ScreenRuntime | null {
+    this.raycaster.setFromCamera(this.ndc(x, y), this.camera);
+    this.raycaster.layers.set(0);
+    for (const hit of this.raycaster.intersectObjects(this.mapGroup.children, true)) {
+      if (!this.pickable(hit.object) || !(hit.object as THREE.Mesh).isMesh) continue;
+      const sc = hit.object.userData.screenSurface ? this.screens.find((s) => s.surf.mesh === hit.object) : undefined;
+      if (!sc || !hit.uv || sc.node.data.props.control === 'none') return null;
+      sc.rt.setCursorUV(hit.uv.x, hit.uv.y);
+      return sc.rt;
+    }
+    return null;
+  }
+
+  private hoverScreens(x: number, y: number): void {
+    const sc = this.screenAt(x, y);
+    if (sc === this.screenHover) return;
+    if (this.screenHover && this.screenHover !== this.screenPress) {
+      this.screenHover.clearCursor();
+      this.screenHover.exit();
+    }
+    this.screenHover = sc;
+    this.renderer.domElement.style.cursor = sc ? 'pointer' : '';
   }
 
   /** Objekt unter dem Mauszeiger (inkl. Icons/Drahtgitter, wenn sichtbar) */
@@ -668,9 +858,41 @@ export class Viewport {
         this.messageTimer = sec;
       },
       keyDown: (code) => this.keys.has(code),
+      setWeather: (type, intensity) => this.weather.setWeather(type, intensity),
       log: (msg, err) => this.onStatus?.(msg, err),
+      onBroadcast: (msg) => {
+        for (const sc of this.screens) sc.rt.receive(msg);
+      },
     });
+    const world = this.runtime;
+    this.screens = [];
+    for (const node of nodes) {
+      const surf = node.instance?.screen;
+      if (!surf) continue;
+      let rt: ScreenRuntime;
+      rt = new ScreenRuntime(structuredClone(node.data.screen ?? defaultScreen()), surf.stageH, {
+        broadcast: (msg) => world.broadcast(msg),
+        showMessage: (text, sec) => {
+          this.message.textContent = text;
+          this.message.classList.remove('hidden');
+          this.messageTimer = sec;
+        },
+        keyDown: (code) => this.keys.has(code),
+        teleportPlayer: (x, y, z) => this.camera.position.set(x, y + SCALE.playerHeight - 0.3, z),
+        objShow: (name, show) => world.setObjectVisible(name, show),
+        setWeather: (type, intensity) => {
+          if (isWeatherType(type)) this.weather.setWeather(type, intensity);
+        },
+        log: (msg, err) => this.onStatus?.(msg, err),
+        exit: () => {
+          rt.clearCursor();
+          rt.exit();
+        },
+      }, node.data.name);
+      this.screens.push({ node, rt, surf });
+    }
     this.runtime.start();
+    for (const sc of this.screens) sc.rt.start();
     this.simInfo.classList.remove('hidden');
     this.onStatus?.(this.runtime.hasScripts ? 'Simulation gestartet' : 'Simulation gestartet (keine Scripts in der Map)');
     this.onSimulationChange?.();
@@ -680,6 +902,14 @@ export class Viewport {
     if (!this.runtime) return;
     this.runtime.stop();
     this.runtime = null;
+    for (const sc of this.screens) sc.rt.stop();
+    this.screens = [];
+    this.screenHover = this.screenPress = null;
+    this.renderer.domElement.style.cursor = '';
+    // Script-Wetter zurück auf die Map-Einstellung
+    const w = this.state.map.world;
+    this.weather.setWeather(isWeatherType(w.weather) ? w.weather : 'klar', w.weatherIntensity);
+    this.weather.clearTracks();
     this.state.simulating = false;
     // Alles auf den gespeicherten Zustand zurücksetzen
     for (const e of this.entries.values()) {
@@ -693,6 +923,7 @@ export class Viewport {
     this.message.classList.add('hidden');
     this.updateGizmo();
     this.updateSelectionVisuals();
+    this.applyWorld();
     this.onStatus?.('Simulation beendet');
     this.onSimulationChange?.();
   }
@@ -700,8 +931,10 @@ export class Viewport {
   // ---------- Frame ----------
 
   private frameLoop(): void {
-    const dt = Math.min(this.clock.getDelta(), 0.05);
-    const t = this.clock.elapsedTime;
+    this.timer.update();
+    const dt = Math.min(this.timer.getDelta(), 0.05);
+    const t = this.timer.getElapsed();
+    if (!this.runtime) this.modeInput?.update?.(dt);
 
     if (this.isFlying) {
       const f = this.forward();
@@ -720,9 +953,26 @@ export class Viewport {
       }
     }
 
+    // Volumetrik: Wind/Regen vom Wetter; beim Simulieren verdrängt die Kamera (= Spieler) Nebel und Rauch
+    const cam = this.camera.position;
+    volumeFX.wind.copy(this.weather.windVector);
+    volumeFX.rain = this.weather.rainAmount;
+    volumeFX.setPlayer(this.runtime ? _feet.set(cam.x, cam.y - SCALE.playerHeight, cam.z) : null, SCALE.playerHeight);
+    volumeFX.setAmbient(this.world.hemi, this.world.sun);
+    volumeFX.update(dt, t, this.camera);
     for (const e of this.entries.values()) e.node.instance?.update?.(dt, t, this.simulating);
     if (this.runtime) {
       this.runtime.update(dt);
+      for (const sc of this.screens) {
+        sc.rt.update(dt);
+        sc.rt.draw(sc.surf.ctx, SCREEN_PX);
+        sc.surf.texture.needsUpdate = true;
+      }
+      const sun = findSun(this.state.map.objects);
+      const q = sun && this.entries.get(sun.id)?.node.root.quaternion;
+      const wo = findWeather(this.state.map.objects);
+      const wq = wo && this.entries.get(wo.id)?.node.root.quaternion;
+      if ((q && !q.equals(this.simSunQuat)) || (wq && !wq.equals(this.simWeatherQuat))) this.applyWorld();
       if (this.selBoxes.children.length) this.updateSelectionVisuals();
     }
     if (this.messageTimer > 0) {
@@ -733,6 +983,15 @@ export class Viewport {
     const p = this.camera.position;
     this.info.textContent = `${p.x.toFixed(1)} / ${p.y.toFixed(1)} / ${p.z.toFixed(1)}  ·  Kamera ${this.speedIndex + 1}`;
 
+    if (this.runtime) {
+      // Simulieren: Kamera = Spieler; Spuren nur, wenn sie in Augenhöhe über dem Boden ist
+      const ground = this.weather.groundHeight;
+      const grounded = p.y - ground < SCALE.playerHeight + 0.4 && p.y > ground;
+      this.weather.trackFeet(_feet.set(p.x, ground, p.z), grounded);
+    }
+    this.weather.update(dt, t, this.camera);
+    this.weather.render(this.camera, dt);
+    updateLandscapes(this.camera);
     this.renderer.clear();
     this.composer.render(dt);
     this.renderer.clearDepth();

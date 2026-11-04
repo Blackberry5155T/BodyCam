@@ -48,6 +48,11 @@ export const DEFAULT_BINDINGS: Record<Action, string> = {
 
 export const QUALITY_LABELS = ['Niedrig', 'Mittel', 'Hoch', 'Ultra', 'Benutzerdefiniert'];
 export const SHADOW_LABELS = ['Aus', 'Niedrig', 'Hoch'];
+export const REFLECTION_LABELS = ['Aus', 'Niedrig', 'Hoch'];
+export const VOLUMETRIC_LABELS = ['Niedrig', 'Mittel', 'Hoch'];
+export const TERRAIN_LABELS = ['Niedrig', 'Mittel', 'Hoch', 'Ultra'];
+/** Detail-Faktor der Landscape-LODs (Abstand, ab dem eine gröbere Stufe benutzt wird) */
+export const TERRAIN_DETAIL = [1.5, 2, 2.5, 3.5];
 export const MM_MODES = ['Team Deathmatch', 'Extraction', 'Horde (Koop)', 'Hunt (PvE)'];
 export const MM_REGIONS = ['Automatisch', 'EU-West', 'EU-Ost', 'Nordamerika', 'Asien'];
 export const MM_PARTY = ['Solo', 'Duo', 'Squad (4)'];
@@ -64,6 +69,9 @@ export interface SettingsData {
   shadows: number; // Index in SHADOW_LABELS
   renderScale: number; // Faktor auf devicePixelRatio
   bloom: boolean;
+  reflections: number; // Index in REFLECTION_LABELS (Pfützen-Spiegelungen)
+  volumetrics: number; // Index in VOLUMETRIC_LABELS (Nebel-Schritte, Partikelmenge)
+  terrainDetail: number; // Index in TERRAIN_LABELS (Landscape-LOD)
   brightness: number;
   fogEnabled: boolean;
   viewDistance: number;
@@ -79,11 +87,11 @@ export interface SettingsData {
   mmParty: number;
 }
 
-export const QUALITY_PRESETS: Pick<SettingsData, 'shadows' | 'renderScale' | 'bloom'>[] = [
-  { shadows: 0, renderScale: 0.75, bloom: false },
-  { shadows: 1, renderScale: 1.0, bloom: true },
-  { shadows: 2, renderScale: 1.0, bloom: true },
-  { shadows: 2, renderScale: 1.5, bloom: true },
+export const QUALITY_PRESETS: Pick<SettingsData, 'shadows' | 'renderScale' | 'bloom' | 'reflections' | 'volumetrics' | 'terrainDetail'>[] = [
+  { shadows: 0, renderScale: 0.75, bloom: false, reflections: 0, volumetrics: 0, terrainDetail: 0 },
+  { shadows: 1, renderScale: 1.0, bloom: true, reflections: 1, volumetrics: 1, terrainDetail: 1 },
+  { shadows: 2, renderScale: 1.0, bloom: true, reflections: 2, volumetrics: 2, terrainDetail: 2 },
+  { shadows: 2, renderScale: 1.5, bloom: true, reflections: 2, volumetrics: 2, terrainDetail: 3 },
 ];
 
 const DEFAULTS: SettingsData = {
@@ -96,6 +104,9 @@ const DEFAULTS: SettingsData = {
   shadows: 2,
   renderScale: 1,
   bloom: true,
+  reflections: 2,
+  volumetrics: 2,
+  terrainDetail: 2,
   brightness: 1,
   fogEnabled: true,
   viewDistance: 25,
@@ -115,6 +126,8 @@ type Listener = (key: keyof SettingsData) => void;
 
 export class Settings {
   data: SettingsData;
+  /** Faktor der Map auf die Sichtweite (große Landscapes: Map-Sichtweite / 60); nur Anzeige */
+  viewScale = 1;
   private listeners: Listener[] = [];
 
   constructor() {
@@ -134,9 +147,16 @@ export class Settings {
     if (this.data[key] === value) return;
     this.data[key] = value;
     // Einzelne Grafikoption geändert → Preset wird "Benutzerdefiniert"
-    if (key === 'shadows' || key === 'renderScale' || key === 'bloom') {
+    if (key === 'shadows' || key === 'renderScale' || key === 'bloom' || key === 'reflections' || key === 'volumetrics' || key === 'terrainDetail') {
+      const d = this.data;
       const match = QUALITY_PRESETS.findIndex(
-        (p) => p.shadows === this.data.shadows && p.renderScale === this.data.renderScale && p.bloom === this.data.bloom,
+        (p) =>
+          p.shadows === d.shadows &&
+          p.renderScale === d.renderScale &&
+          p.bloom === d.bloom &&
+          p.reflections === d.reflections &&
+          p.volumetrics === d.volumetrics &&
+          p.terrainDetail === d.terrainDetail,
       );
       this.data.quality = match === -1 ? QUALITY_LABELS.length - 1 : match;
     }
@@ -153,6 +173,9 @@ export class Settings {
     this.emit('shadows');
     this.emit('renderScale');
     this.emit('bloom');
+    this.emit('reflections');
+    this.emit('volumetrics');
+    this.emit('terrainDetail');
     this.emit('quality');
   }
 

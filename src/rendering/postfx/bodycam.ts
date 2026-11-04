@@ -14,6 +14,7 @@ export const BodycamShader = {
     uVignette: { value: 0.8 },
     uGlitch: { value: 0 },
     uExposure: { value: 1 },
+    uRainLens: { value: 0 },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -32,6 +33,7 @@ export const BodycamShader = {
     uniform float uVignette;
     uniform float uGlitch;
     uniform float uExposure;
+    uniform float uRainLens;
     varying vec2 vUv;
 
     float hash(vec2 p) {
@@ -51,8 +53,37 @@ export const BodycamShader = {
       return c / vec2(aspect, 1.0) + 0.5;
     }
 
+    // Regentropfen auf der Linse: je Zelle ein Tropfen, der auftaucht, etwas abrutscht und verdunstet.
+    // Liefert Brechungs-Versatz (xy) und Bedeckung (z).
+    vec3 dropLayer(vec2 uv, float scale, float t, float amount) {
+      float aspect = uResolution.x / uResolution.y;
+      vec2 p = uv * vec2(aspect, 1.0) * scale;
+      vec2 cell = floor(p);
+      float h = hash(cell);
+      float tt = t * (0.12 + h * 0.1) + h * 10.0;
+      float life = fract(tt);
+      float cyc = floor(tt);
+      if (hash(cell + cyc * 1.37) > amount) return vec3(0.0);
+      vec2 c = vec2(hash(cell + cyc + 3.1), hash(cell + cyc + 7.7)) * 0.6 + 0.2;
+      // manche Tropfen rutschen nach unten
+      c.y += step(0.7, hash(cell + cyc + 9.2)) * life * life * 0.6;
+      vec2 dlt = fract(p) - c;
+      dlt.y *= 1.0 + step(0.7, hash(cell + cyc + 9.2)) * 0.6;
+      float r = (0.18 + hash(cell + 2.4) * 0.18) * (1.0 - life * 0.5);
+      float dist = length(dlt);
+      float m = (1.0 - smoothstep(r * 0.8, r, dist)) * (1.0 - smoothstep(0.75, 1.0, life));
+      return vec3(-dlt / r * 0.035 / scale, m);
+    }
+
     void main() {
       vec2 uv = vUv;
+      float dropMask = 0.0;
+      if (uRainLens > 0.001) {
+        vec3 d1 = dropLayer(uv, 7.0, uTime, uRainLens * 0.35);
+        vec3 d2 = dropLayer(uv + 0.37, 13.0, uTime * 1.3, uRainLens * 0.5);
+        uv += d1.xy * d1.z + d2.xy * d2.z;
+        dropMask = max(d1.z, d2.z);
+      }
 
       // Signal-Glitch: einzelne Zeilenblöcke horizontal versetzt
       if (uGlitch > 0.001) {
@@ -73,6 +104,8 @@ export const BodycamShader = {
       float mask = smoothstep(0.0, 0.006, min(edgeDist.x, edgeDist.y));
 
       col *= uExposure;
+      // Tropfen streuen Licht: etwas heller, weicher Kontrast
+      col = mix(col, col * 0.85 + 0.03, dropMask * 0.6);
 
       // Farbgebung: entsättigt, leicht kühl-grünlich, angehobene Schwärzen (billiger Sensor)
       float lum = dot(col, vec3(0.299, 0.587, 0.114));

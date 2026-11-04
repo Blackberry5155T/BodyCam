@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { ASSETS, type AssetContext, type AssetDef, type AssetInstance } from './assets.ts';
 import type { MapData, MapObjectData, WorldSettings } from './mapFormat.ts';
 import { SCALE, type Collider } from './collision.ts';
+import { SunLight } from 'three/examples/jsm/lights/SunLight.js';
+import { Sky } from './sky.ts';
+import { SUN_TYPE, sunWorld } from './sun.ts';
 
 // Baut aus MapData die Szene. Gemeinsam genutzt von Spiel (main.ts) und Editor.
 
@@ -57,7 +60,8 @@ export function buildInstance(node: MapNode, ctx: AssetContext): void {
 export function applyTransform(node: MapNode): void {
   const d = node.data;
   node.root.position.set(...d.pos);
-  node.root.rotation.set(d.rot[0] * DEG, d.rot[1] * DEG, d.rot[2] * DEG, 'XYZ');
+  if (node.def.fixedRotation) node.root.rotation.set(0, 0, 0);
+  else node.root.rotation.set(d.rot[0] * DEG, d.rot[1] * DEG, d.rot[2] * DEG, 'XYZ');
   if (node.def.fixedScale) node.root.scale.set(1, 1, 1);
   else node.root.scale.set(...d.scale);
   node.root.updateMatrixWorld(true);
@@ -70,7 +74,7 @@ const round = (v: number, f = 10000) => Math.round(v * f) / f;
 export function readTransform(node: MapNode): void {
   const r = node.root;
   node.data.pos = [round(r.position.x), round(r.position.y), round(r.position.z)];
-  node.data.rot = [round(r.rotation.x / DEG, 100), round(r.rotation.y / DEG, 100), round(r.rotation.z / DEG, 100)];
+  if (!node.def.fixedRotation) node.data.rot = [round(r.rotation.x / DEG, 100), round(r.rotation.y / DEG, 100), round(r.rotation.z / DEG, 100)];
   if (!node.def.fixedScale) node.data.scale = [round(r.scale.x), round(r.scale.y), round(r.scale.z)];
 }
 
@@ -84,7 +88,7 @@ const _x = new THREE.Vector3();
 const _box = new THREE.Box3();
 const _m = new THREE.Matrix4();
 
-/** Lokale Box (im Raum von matrixWorld) → gedrehte Box, falls nur um Y gedreht, sonst achsenparallele Hülle */
+/** Lokale Box (im Raum von matrixWorld) → achsenparallel, um Y gedreht (obox) oder beliebig gedreht (rbox) */
 function colliderFromLocalBox(local: THREE.Box3, matrixWorld: THREE.Matrix4): Collider {
   matrixWorld.decompose(_pos, _quat, _scl);
   _up.set(0, 1, 0).applyQuaternion(_quat);
@@ -97,14 +101,19 @@ function colliderFromLocalBox(local: THREE.Box3, matrixWorld: THREE.Matrix4): Co
     if (Math.abs(yaw) < 1e-4) return { type: 'box', min: center.clone().sub(half), max: center.clone().add(half) };
     return { type: 'obox', center, half, yaw };
   }
-  _box.copy(local).applyMatrix4(matrixWorld);
-  return { type: 'box', min: _box.min.clone(), max: _box.max.clone() };
+  // Gekippt (z. B. Rampe): exakte gedrehte Box. Ohne Scherung (ungleichmäßige Skalierung + Drehung im Elternteil)
+  // stimmt das genau; mit Scherung ist es eine gute Näherung.
+  const center = local.getCenter(new THREE.Vector3()).applyMatrix4(matrixWorld);
+  const half = local.getSize(new THREE.Vector3()).multiply(_scl).multiplyScalar(0.5);
+  half.set(Math.abs(half.x), Math.abs(half.y), Math.abs(half.z));
+  return { type: 'rbox', center, half, quat: _quat.clone() };
 }
 
 export function computeColliders(node: MapNode): Collider[] {
   const out: Collider[] = [];
   if (!node.instance || !node.collisionEnabled) return out;
   node.root.updateMatrixWorld(true);
+  if (node.instance.colliders) out.push(...node.instance.colliders(node.root));
   node.instance.object.traverse((o) => {
     const kind = o.userData.collider as string | undefined;
     if (!kind) return;
@@ -156,14 +165,21 @@ export function refreshColliders(node: MapNode, all: Collider[]): void {
 export class WorldRig {
   readonly group = new THREE.Group();
   readonly hemi = new THREE.HemisphereLight();
-  readonly sun = new THREE.DirectionalLight();
+  // SunLight (three r186): 2 Schattenkaskaden, die der jeweils rendernden Kamera folgen
+  readonly sun = new SunLight();
+  readonly sky = new Sky();
   readonly groundFog: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+  // Grundwerte ohne Wetter; setWeather() rechnet Bewölkung/Blitz darauf
+  private baseSun = 1;
+  private baseHemi = 1;
+  private overcast = 0;
+  private flash = 0;
 
   constructor(world: WorldSettings) {
-    this.sun.shadow.mapSize.set(2048, 2048);
-    this.sun.shadow.bias = -0.0004;
-    this.sun.shadow.normalBias = 0.03;
-    this.sun.shadow.radius = 4;
+    this.sun.shadow.mapSize.set(2048, 2048); // pro Kaskade (Atlas 2× so breit)
+    this.sun.shadow.bias = -0.00015;
+    this.sun.shadow.normalBias = 0.04;
+    this.sun.shadow.radius = 2;
     this.groundFog = new THREE.Mesh(
       new THREE.PlaneGeometry(1, 1),
       new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false }),
@@ -171,7 +187,7 @@ export class WorldRig {
     this.groundFog.rotation.x = -Math.PI / 2;
     this.groundFog.userData.noPick = true;
     this.groundFog.userData.noShot = true;
-    this.group.add(this.hemi, this.sun, this.sun.target, this.groundFog);
+    this.group.add(this.hemi, this.sun, this.groundFog, this.sky.mesh);
     this.apply(world);
   }
 
@@ -183,17 +199,52 @@ export class WorldRig {
     this.sun.intensity = w.sunIntensity;
     const az = w.sunAzimuth * DEG;
     const el = w.sunElevation * DEG;
-    const dist = Math.max(22, w.sunShadowArea);
-    this.sun.position.set(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el)).multiplyScalar(dist);
+    // Richtung = Position (Licht fällt Richtung Ursprung); die Kaskaden passt three pro Frame an die Kamera an
+    this.sun.position.set(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el));
     this.sun.castShadow = w.sunShadow;
-    const a = w.sunShadowArea;
-    Object.assign(this.sun.shadow.camera, { left: -a, right: a, top: a, bottom: -a, near: 1, far: dist * 2.6 });
-    this.sun.shadow.camera.updateProjectionMatrix();
+    // Schattendistanz = min(shadow.camera.far, Kamera.far)
+    this.sun.shadow.camera.far = Math.max(10, w.sunShadowDistance);
     this.groundFog.material.color.set(w.fogColor);
     this.groundFog.material.opacity = w.groundFogOpacity;
     this.groundFog.position.y = w.groundFogHeight;
     this.groundFog.scale.set(w.groundFogSize, w.groundFogSize, 1);
     this.groundFog.visible = w.groundFog;
+    this.sky.mesh.visible = w.sky;
+    this.sky.apply({
+      zenith: w.skyZenith,
+      horizon: w.skyHorizon,
+      ground: w.groundColor,
+      fogColor: w.fogColor,
+      sunColor: w.sunColor,
+      sunIntensity: w.sunIntensity,
+      sunDir: this.sun.position.clone().normalize(),
+      sunSize: w.sunSize,
+      glow: w.sunGlow,
+      disc: w.sunDisc,
+    });
+    this.baseSun = w.sunIntensity;
+    this.baseHemi = w.hemiIntensity;
+    this.applyWeatherLight();
+  }
+
+  /** Wetter: Bewölkung dämpft die Sonne, Blitze hellen kurz alles auf */
+  setWeather(overcast: number, flash: number): void {
+    if (overcast === this.overcast && flash === this.flash) return;
+    this.overcast = overcast;
+    this.flash = flash;
+    this.applyWeatherLight();
+  }
+
+  private applyWeatherLight(): void {
+    const o = this.overcast;
+    this.sun.intensity = this.baseSun * (1 - 0.8 * o);
+    this.hemi.intensity = this.baseHemi * (1 - 0.15 * o) + this.flash * 3;
+    this.sky.setWeather(o, this.flash);
+  }
+
+  /** Distanznebel an/aus: Himmel blendet am Horizont in die Nebelfarbe */
+  setFog(on: boolean): void {
+    this.sky.setFog(on);
   }
 }
 
@@ -245,6 +296,16 @@ export function loadMap(data: MapData, ctx: AssetContext): LoadedMap {
     }
   }
 
+  // Sonnen-Objekt steuert Sonnenstand + Sonnenlicht; folgt auch Drehungen durch Scripts
+  const sunNode = nodes.find((n) => n.data.type === SUN_TYPE);
+  const sunQuat = new THREE.Quaternion();
+  const applySun = () => {
+    if (!sunNode) return;
+    sunQuat.copy(sunNode.root.quaternion);
+    world.apply(sunWorld(data.world, sunNode.data, sunQuat));
+  };
+  applySun();
+
   return {
     data,
     group,
@@ -256,6 +317,7 @@ export function loadMap(data: MapData, ctx: AssetContext): LoadedMap {
     terminal,
     update(dt: number, t: number) {
       for (const n of nodes) n.instance?.update?.(dt, t, true);
+      if (sunNode && !sunNode.root.quaternion.equals(sunQuat)) applySun();
     },
   };
 }

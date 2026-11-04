@@ -13,7 +13,7 @@
     "sunAzimuth": 63.4,
     "sunElevation": 53.3,
     "sunShadow": true,
-    "sunShadowArea": 25,
+    "sunShadowDistance": 120,
     "groundFog": true,
     "groundFogOpacity": 0.22,
     "groundFogHeight": 0.4,
@@ -787,6 +787,35 @@
         1
       ],
       "props": {}
+    },
+    {
+      "id": "sun01",
+      "name": "Sonne",
+      "type": "sun",
+      "pos": [
+        0,
+        6,
+        -12
+      ],
+      "rot": [
+        -71.54,
+        32.3,
+        58.01
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {
+        "color": "#aebdd0",
+        "intensity": 0.9,
+        "disc": true,
+        "size": 2.5,
+        "glow": 0.5,
+        "shadow": true,
+        "shadowDistance": 120
+      }
     }
   ]
 }

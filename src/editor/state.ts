@@ -1,7 +1,12 @@
 import { cloneObject, newId, type MapData, type MapObjectData } from '../world/mapFormat.ts';
 import { ASSETS } from '../world/assets.ts';
+import type { DataEdit } from './history.ts';
 
 // Zentraler Editor-Zustand: Map-Daten, Auswahl, Undo/Redo. Panels und Viewport hören auf Ereignisse.
+// Undo/Redo kennt zwei Arten von Schritten:
+//  - JSON-Snapshot der ganzen Map (normale Objekt-Änderungen, klein)
+//  - DataEdit (Pinselstriche auf Heightmaps/Splatmaps …): nur die geänderten Kacheln, siehe history.ts
+// Die Historie ist nach Anzahl UND Speicher begrenzt; die ältesten Schritte fallen heraus.
 
 export type EditorEvent =
   | 'scene' // Objekte hinzugefügt/entfernt/geändert → Viewport gleicht ab
@@ -10,7 +15,12 @@ export type EditorEvent =
   | 'world' // World Settings geändert
   | 'meta'; // Name, ungespeichert-Status
 
-const MAX_HISTORY = 150;
+const MAX_HISTORY = 300;
+const HISTORY_BUDGET = 256 * 1024 * 1024; // Bytes
+
+type HistoryEntry = { kind: 'json'; json: string } | { kind: 'data'; edit: DataEdit };
+
+const entryBytes = (e: HistoryEntry) => (e.kind === 'json' ? e.json.length * 2 : e.edit.bytes);
 const CLIPBOARD_KEY = 'bodycam.editor.clipboard';
 
 export class EditorState {
@@ -22,8 +32,8 @@ export class EditorState {
   editorHidden = new Set<string>();
   simulating = false;
 
-  private undoStack: string[] = [];
-  private redoStack: string[] = [];
+  private undoStack: HistoryEntry[] = [];
+  private redoStack: HistoryEntry[] = [];
   private snapshot = '';
   private listeners = new Map<EditorEvent, Set<() => void>>();
 
@@ -67,10 +77,22 @@ export class EditorState {
     if (this.simulating) return;
     const now = JSON.stringify(this.map);
     if (now === this.snapshot) return;
-    this.undoStack.push(this.snapshot);
-    if (this.undoStack.length > MAX_HISTORY) this.undoStack.shift();
-    this.redoStack = [];
+    this.push({ kind: 'json', json: this.snapshot });
     this.snapshot = now;
+  }
+
+  /** Abgeschlossene Änderung an Binär-Daten als Undo-Schritt festhalten (Daten sind bereits geändert) */
+  commitData(edit: DataEdit | null): void {
+    if (this.simulating || !edit) return;
+    this.push({ kind: 'data', edit });
+  }
+
+  private push(entry: HistoryEntry): void {
+    this.undoStack.push(entry);
+    this.redoStack = [];
+    let total = 0;
+    for (const e of this.undoStack) total += entryBytes(e);
+    while (this.undoStack.length > 1 && (this.undoStack.length > MAX_HISTORY || total > HISTORY_BUDGET)) total -= entryBytes(this.undoStack.shift()!);
     this.dirty = true;
     this.emit('meta');
   }
@@ -91,22 +113,29 @@ export class EditorState {
   }
 
   undo(): void {
-    this.restore(this.undoStack, this.redoStack);
+    this.restore(this.undoStack, this.redoStack, true);
   }
 
   redo(): void {
-    this.restore(this.redoStack, this.undoStack);
+    this.restore(this.redoStack, this.undoStack, false);
   }
 
-  private restore(from: string[], to: string[]): void {
+  private restore(from: HistoryEntry[], to: HistoryEntry[], undo: boolean): void {
     if (this.simulating) return;
-    const snap = from.pop();
-    if (!snap) return;
-    to.push(JSON.stringify(this.map));
-    this.snapshot = snap;
-    this.map = JSON.parse(snap) as MapData;
-    this.selection = this.selection.filter((id) => this.get(id));
+    const entry = from.pop();
+    if (!entry) return;
     this.dirty = true;
+    if (entry.kind === 'data') {
+      if (undo) entry.edit.undo();
+      else entry.edit.redo();
+      to.push(entry);
+      this.emit('meta');
+      return;
+    }
+    to.push({ kind: 'json', json: JSON.stringify(this.map) });
+    this.snapshot = entry.json;
+    this.map = JSON.parse(entry.json) as MapData;
+    this.selection = this.selection.filter((id) => this.get(id));
     this.emit('scene', 'world', 'selection', 'meta');
   }
 

@@ -206,7 +206,7 @@ export class PlayerBody {
     // --- Zustandsblends ---
     this.airBlend = damp(this.airBlend, s.onGround ? 0 : 1, 10, dt);
     this.sprintBlend = damp(this.sprintBlend, s.sprinting && s.walk > 1.1 ? 1 : 0, 6, dt);
-    this.flashBlend = damp(this.flashBlend, this.flashlightOn ? 1 : 0, 7, dt);
+    this.flashBlend = damp(this.flashBlend, this.flashlightOn && !this.relaxed ? 1 : 0, 7, dt); // am Terminal automatisch aus
     this.relaxBlend = damp(this.relaxBlend, this.relaxed ? 1 : 0, 5, dt);
 
     // Rückstoß-Feder
@@ -304,8 +304,8 @@ export class PlayerBody {
     const fb = this.flashBlend;
     const supportX = 1.1 + ads * 0.14 + aim - low * 0.8 + r * 0.25;
     const supportY = -0.62 - ads * 0.12;
-    const torchX = 1.02 + aim - low * 0.9;
-    const torchY = -0.22;
+    const torchX = 2.0 + aim - low * 0.9;
+    const torchY = 0.22;
     L.upperArm.joint.rotation.set(
       THREE.MathUtils.lerp(supportX, torchX, fb) + armSwayX - runSwing,
       THREE.MathUtils.lerp(supportY, torchY, fb) - armSwayY,
@@ -340,7 +340,7 @@ export class PlayerBody {
     this.aimPoint.lerp(desired, 1 - Math.exp(-14 * dt));
     // Beim Sprinten zeigt die Lampe nach unten vor die Füße
     const target = this.aimPoint.clone();
-    target.y -= (low + this.relaxBlend) * 6; // auch am Terminal: nicht auf den spiegelnden Bildschirm leuchten
+    target.y -= 3 + (low + this.relaxBlend) * 6; // Grundversatz: Lichtkegel sitzt tiefer; // auch am Terminal: nicht auf den spiegelnden Bildschirm leuchten
     this.flashTarget.position.copy(target);
     this.root.updateMatrixWorld(true);
     this.torch.lookAt(target);
