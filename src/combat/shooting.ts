@@ -24,6 +24,11 @@ export function isSolid(o: THREE.Object3D): boolean {
   return !(o as THREE.Points).isPoints && !(o as THREE.Line).isLine && !(o as THREE.Sprite).isSprite;
 }
 
+function isDescendant(o: THREE.Object3D, root: THREE.Object3D): boolean {
+  for (let c: THREE.Object3D | null = o; c; c = c.parent) if (c === root) return true;
+  return false;
+}
+
 const MUZZLE_OFFSET = new THREE.Vector3(0.16, -0.2, -0.55); // Waffe rechts unterhalb der Brustkamera
 const FLASH_TIME = 0.05;
 const MAX_HOLES = 80;
@@ -54,7 +59,11 @@ export class Shooter {
     volumeFX.addLight(this.flash);
   }
 
-  fire(camera: THREE.Camera, muzzlePos?: THREE.Vector3): ShotResult {
+  /**
+   * Schuss entlang der Kameramitte. `targets` ersetzt die Standard-Ziele (z. B. für NPCs: Welt + Spielerkörper),
+   * Treffer auf `ignore` (eigener Körper des Schützen) werden übersprungen.
+   */
+  fire(camera: THREE.Camera, muzzlePos?: THREE.Vector3, opts: { targets?: THREE.Object3D[]; ignore?: THREE.Object3D } = {}): ShotResult {
     this.raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
     const ray = this.raycaster.ray;
     const muzzle = muzzlePos ?? MUZZLE_OFFSET.clone().applyMatrix4(camera.matrixWorld);
@@ -63,7 +72,10 @@ export class Shooter {
     this.flashTime = FLASH_TIME;
 
     // Unsichtbare und rein optische Objekte (Nebel, Partikel) werden durchschossen
-    const hit = this.raycaster.intersectObjects(this.targets, true).find((h) => isSolid(h.object));
+    const ignore = opts.ignore;
+    const hit = this.raycaster
+      .intersectObjects(opts.targets ?? this.targets, true)
+      .find((h) => isSolid(h.object) && !(ignore && isDescendant(h.object, ignore)));
     const end = hit ? hit.point : ray.origin.clone().addScaledVector(ray.direction, 120);
     this.spawnTracer(muzzle, end);
     // Schussbahn reißt eine Schneise in Nebel/Rauch, Feuer sprühen Funken

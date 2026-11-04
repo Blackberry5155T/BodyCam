@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { BodyAnimState } from './body.ts';
-import type { Input } from '../core/input.ts';
+import type { Action } from '../core/settings.ts';
 import type { Settings } from '../core/settings.ts';
 import { SCALE } from '../world/collision.ts';
 import { RAPIER, WORLD_QUERY, type PhysicsWorld } from '../physics/physics.ts';
@@ -32,6 +32,12 @@ const COVER_REACH = 1.3; // so weit vor dem Körpermittelpunkt wird nach Deckung
 const PEEK_CLEARANCE = 0.2; // Kamera/Waffe so weit über die Deckungskante heben
 const LEAN_DIST = 0.5; // seitliches Vorbeugen an der Deckung vorbei
 const LEAN_PROBE_RADIUS = 0.15;
+
+/** Eingabequelle: Tastatur/Maus (Input) oder eine KI, die dieselben Aktionen „drückt“ */
+export interface ControlInput {
+  down(action: Action): boolean;
+  clear(): void;
+}
 
 /** Ziel für den Autopiloten (z. B. vor das Terminal treten) */
 export interface FocusTarget {
@@ -65,6 +71,8 @@ export class PlayerController {
   readonly position = new THREE.Vector3();
   readonly velocity = new THREE.Vector3();
   isLocked = false;
+  /** Steuerung gesperrt (z. B. Spieler ausgeschaltet) */
+  disabled = false;
 
   private onGround = true;
   private groundSpeed = 0;
@@ -111,9 +119,11 @@ export class PlayerController {
     private domElement: HTMLElement,
     private physics: PhysicsWorld,
     spawn: THREE.Vector3,
-    private input: Input,
+    private input: ControlInput,
     private settings: Settings,
     spawnYaw = 0,
+    /** KI-gesteuert: keine Maus/Pointer-Lock, Blick kommt über setLook() */
+    ai = false,
   ) {
     this.position.copy(spawn);
     this.yaw = this.viewYaw = spawnYaw;
@@ -132,8 +142,14 @@ export class PlayerController {
     this.capsule = physics.createCharacterCapsule(0.5, SCALE.playerRadius);
     this.placeCapsule(this.position.y - this.height);
 
+    if (ai) {
+      this.isLocked = true;
+      this.updateCamera(0, false);
+      return;
+    }
+
     document.addEventListener('mousemove', (e) => {
-      if (!this.isLocked || this.focus) return;
+      if (!this.isLocked || this.focus || this.disabled) return;
       const sens = MOUSE_SENSITIVITY * this.settings.data.mouseSensitivity;
       this.yaw -= e.movementX * sens;
       this.pitch -= e.movementY * sens * (this.settings.data.invertY ? -1 : 1);
@@ -197,6 +213,42 @@ export class PlayerController {
     return this.focus !== null;
   }
 
+  /** Blickrichtung direkt setzen (KI) */
+  setLook(yaw: number, pitch: number): void {
+    this.yaw = yaw;
+    this.pitch = THREE.MathUtils.clamp(pitch, -1.45, 1.45);
+  }
+
+  get lookYaw(): number {
+    return this.yaw;
+  }
+
+  get lookPitch(): number {
+    return this.pitch;
+  }
+
+  /** 0 = Hüfthaltung, 1 = voll im Anschlag */
+  get aimAmount(): number {
+    return this.aimBlend;
+  }
+
+  get grounded(): boolean {
+    return this.onGround;
+  }
+
+  /** Augenhöhe über den Füßen (Stehen/Ducken/über Deckung) */
+  get eyeHeight(): number {
+    return this.height;
+  }
+
+  /** Treffer erhalten: Erschütterung und Verreißen des Blicks */
+  hurt(strength: number): void {
+    this.trauma = Math.min(1, this.trauma + 0.5 * strength);
+    this.recoilPitch.velocity += (Math.random() - 0.3) * 3 * strength;
+    this.recoilYaw.velocity += (Math.random() - 0.5) * 4 * strength;
+    this.recoilRoll.velocity += (Math.random() - 0.5) * 3 * strength;
+  }
+
   /** Waffenrückstoß: Kamera springt hoch, leichtes seitliches Verreißen, Erschütterung */
   kick(): void {
     this.recoilPitch.velocity += 2.6;
@@ -208,8 +260,8 @@ export class PlayerController {
 
   update(dt: number): void {
     this.time += dt;
-    const active = this.isLocked && !this.focus;
-    const down = (a: Parameters<Input['down']>[0]) => active && this.input.down(a);
+    const active = this.isLocked && !this.focus && !this.disabled;
+    const down = (a: Action) => active && this.input.down(a);
     const forward = down('forward') ? 1 : down('back') ? -1 : 0;
     const strafe = down('right') ? 1 : down('left') ? -1 : 0;
     this.crouching = down('crouch');

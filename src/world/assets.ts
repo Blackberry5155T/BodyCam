@@ -898,6 +898,25 @@ export const ASSETS: Record<string, AssetDef> = {
       return { object, helper: helperMark(helper) };
     },
   },
+  npcspawn: {
+    label: 'NPC-Spawn (Training)',
+    category: 'Gameplay',
+    fixedScale: true,
+    props: [],
+    create: (_o, ctx) => {
+      const object = new THREE.Group();
+      if (!ctx.editor) return { object };
+      const helper = new THREE.Group();
+      const capsule = new THREE.Mesh(
+        new THREE.CapsuleGeometry(SCALE.playerRadius, SCALE.playerHeight - SCALE.playerRadius * 2, 4, 12),
+        new THREE.MeshBasicMaterial({ color: '#ff4a4a', wireframe: true, toneMapped: false }),
+      );
+      capsule.position.y = SCALE.playerHeight / 2;
+      helper.add(capsule);
+      helper.add(new THREE.ArrowHelper(new THREE.Vector3(0, 0, -1), new THREE.Vector3(0, 1.5, 0), 1, 0xff4a4a, 0.25, 0.15));
+      return { object, helper: helperMark(helper) };
+    },
+  },
   trigger: {
     label: 'Trigger-Volumen',
     category: 'Gameplay',
@@ -1197,6 +1216,7 @@ export const PRESETS: AssetPreset[] = [
   { id: 'welding', label: 'Schweißfunken', category: 'Effekte', type: 'sparks', icon: 'sparks', props: { color: '#9fd0ff', rate: 6, count: 10, speed: 4.5, life: 0.8, size: 0.015 } },
 
   { id: 'spawn', label: 'Player Start', category: 'Gameplay', type: 'spawn', icon: 'flag' },
+  { id: 'npcspawn', label: 'NPC-Spawn (Training: Gegner erscheinen hier)', category: 'Gameplay', type: 'npcspawn', icon: 'flag' },
   { id: 'trigger', label: 'Trigger-Volumen', category: 'Gameplay', type: 'trigger', icon: 'trigger', scale: [2, 2, 2] },
   { id: 'terminal', label: 'Terminal (Hauptmenü)', category: 'Gameplay', type: 'terminal', icon: 'monitor' },
   { id: 'screen', label: 'Bildschirm (programmierbar)', category: 'Gameplay', type: 'screen', icon: 'monitor' },

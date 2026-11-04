@@ -193,6 +193,7 @@ async function openDialog(): Promise<void> {
     }, () => void deleteLocalMap(m.name));
   }
   entry('Startmap (mitgeliefert, src/maps/start.json)', 'Vorlage', () => void openMap(MAPS.start));
+  entry('Trainingslevel (mitgeliefert, src/maps/training.json)', 'Vorlage', () => void openMap(MAPS.training));
   const body = h('div', {}, h('div', { style: 'color:var(--text-dim)' }, 'Im Browser gespeicherte Maps:'), list);
   close = dialog('Map öffnen', body, [
     {

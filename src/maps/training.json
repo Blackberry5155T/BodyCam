@@ -1,0 +1,2288 @@
+{
+  "format": "bodycam-map",
+  "version": 2,
+  "name": "Trainingslevel",
+  "world": {
+    "background": "#12161c",
+    "sky": true,
+    "skyZenith": "#0b0f16",
+    "skyHorizon": "#2a3340",
+    "fogColor": "#161b22",
+    "skyColor": "#3d4a5c",
+    "groundColor": "#0e0d0b",
+    "hemiIntensity": 0.32,
+    "sunColor": "#8ea4c8",
+    "sunIntensity": 0.35,
+    "sunAzimuth": 220,
+    "sunElevation": 35,
+    "sunShadow": true,
+    "sunShadowDistance": 90,
+    "sunDisc": false,
+    "sunSize": 2,
+    "sunGlow": 0.3,
+    "viewDistance": 70,
+    "groundFog": true,
+    "groundFogOpacity": 0.25,
+    "groundFogHeight": 0.5,
+    "groundFogSize": 60,
+    "exposure": 1,
+    "groundPlane": true,
+    "weather": "klar",
+    "weatherIntensity": 1,
+    "windDirection": 30,
+    "windStrength": 1.5,
+    "wetness": 0.2,
+    "puddles": 0.4,
+    "snowCover": 0,
+    "weatherTimeScale": 1
+  },
+  "objects": [
+    {
+      "id": "tr1",
+      "name": "Boden",
+      "type": "box",
+      "pos": [
+        0,
+        -0.05,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        58,
+        0.1,
+        58
+      ],
+      "props": {
+        "material": "beton_dunkel",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 2,
+        "castShadow": false,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr2",
+      "name": "Mauer Nord",
+      "type": "box",
+      "pos": [
+        0,
+        2,
+        -28
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        56,
+        4,
+        0.4
+      ],
+      "props": {
+        "material": "wand_beton",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr3",
+      "name": "Mauer Süd",
+      "type": "box",
+      "pos": [
+        0,
+        2,
+        28
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        56,
+        4,
+        0.4
+      ],
+      "props": {
+        "material": "wand_beton",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr4",
+      "name": "Mauer West",
+      "type": "box",
+      "pos": [
+        -28,
+        2,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.4,
+        4,
+        56
+      ],
+      "props": {
+        "material": "wand_beton",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr5",
+      "name": "Mauer Ost",
+      "type": "box",
+      "pos": [
+        28,
+        2,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.4,
+        4,
+        56
+      ],
+      "props": {
+        "material": "wand_beton",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr6",
+      "name": "Deckung niedrig 1",
+      "type": "box",
+      "pos": [
+        0,
+        0.55,
+        19
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        3,
+        1.1,
+        0.4
+      ],
+      "props": {
+        "material": "beton_gelb",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr7",
+      "name": "Deckung niedrig 2",
+      "type": "box",
+      "pos": [
+        -7,
+        0.55,
+        12
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        3,
+        1.1,
+        0.4
+      ],
+      "props": {
+        "material": "beton_gelb",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr8",
+      "name": "Deckung niedrig 3",
+      "type": "box",
+      "pos": [
+        7,
+        0.55,
+        12
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        3,
+        1.1,
+        0.4
+      ],
+      "props": {
+        "material": "beton_gelb",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr9",
+      "name": "Deckung niedrig 4",
+      "type": "box",
+      "pos": [
+        0,
+        0.55,
+        4
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        3,
+        1.1,
+        0.4
+      ],
+      "props": {
+        "material": "beton_gelb",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr10",
+      "name": "Deckung niedrig 5",
+      "type": "box",
+      "pos": [
+        -14,
+        0.55,
+        2
+      ],
+      "rot": [
+        0,
+        90,
+        0
+      ],
+      "scale": [
+        3,
+        1.1,
+        0.4
+      ],
+      "props": {
+        "material": "beton_gelb",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr11",
+      "name": "Deckung niedrig 6",
+      "type": "box",
+      "pos": [
+        14,
+        0.55,
+        2
+      ],
+      "rot": [
+        0,
+        90,
+        0
+      ],
+      "scale": [
+        3,
+        1.1,
+        0.4
+      ],
+      "props": {
+        "material": "beton_gelb",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr12",
+      "name": "Deckung niedrig 7",
+      "type": "box",
+      "pos": [
+        -8,
+        0.55,
+        -8
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        3,
+        1.1,
+        0.4
+      ],
+      "props": {
+        "material": "beton_gelb",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr13",
+      "name": "Deckung niedrig 8",
+      "type": "box",
+      "pos": [
+        8,
+        0.55,
+        -8
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        3,
+        1.1,
+        0.4
+      ],
+      "props": {
+        "material": "beton_gelb",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr14",
+      "name": "Deckung niedrig 9",
+      "type": "box",
+      "pos": [
+        0,
+        0.55,
+        -16
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        3,
+        1.1,
+        0.4
+      ],
+      "props": {
+        "material": "beton_gelb",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr15",
+      "name": "Deckung niedrig 10",
+      "type": "box",
+      "pos": [
+        -18,
+        0.55,
+        -14
+      ],
+      "rot": [
+        0,
+        45,
+        0
+      ],
+      "scale": [
+        3,
+        1.1,
+        0.4
+      ],
+      "props": {
+        "material": "beton_gelb",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr16",
+      "name": "Deckung niedrig 11",
+      "type": "box",
+      "pos": [
+        18,
+        0.55,
+        -14
+      ],
+      "rot": [
+        0,
+        -45,
+        0
+      ],
+      "scale": [
+        3,
+        1.1,
+        0.4
+      ],
+      "props": {
+        "material": "beton_gelb",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr17",
+      "name": "Deckung niedrig 12",
+      "type": "box",
+      "pos": [
+        -20,
+        0.55,
+        18
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        3,
+        1.1,
+        0.4
+      ],
+      "props": {
+        "material": "beton_gelb",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr18",
+      "name": "Deckung niedrig 13",
+      "type": "box",
+      "pos": [
+        20,
+        0.55,
+        18
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        3,
+        1.1,
+        0.4
+      ],
+      "props": {
+        "material": "beton_gelb",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr19",
+      "name": "Deckung niedrig 14",
+      "type": "box",
+      "pos": [
+        -6,
+        0.55,
+        -22
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        3,
+        1.1,
+        0.4
+      ],
+      "props": {
+        "material": "beton_gelb",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr20",
+      "name": "Deckung niedrig 15",
+      "type": "box",
+      "pos": [
+        6,
+        0.55,
+        -22
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        3,
+        1.1,
+        0.4
+      ],
+      "props": {
+        "material": "beton_gelb",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr21",
+      "name": "Kiste 1",
+      "type": "box",
+      "pos": [
+        -3,
+        0.6,
+        16
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1.2,
+        1.2,
+        1.2
+      ],
+      "props": {
+        "material": "holz",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr22",
+      "name": "Kiste 2",
+      "type": "box",
+      "pos": [
+        3.5,
+        0.6,
+        8
+      ],
+      "rot": [
+        0,
+        37,
+        0
+      ],
+      "scale": [
+        1.2,
+        1.2,
+        1.2
+      ],
+      "props": {
+        "material": "holz",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr23",
+      "name": "Kiste 3",
+      "type": "box",
+      "pos": [
+        -10,
+        0.6,
+        -2
+      ],
+      "rot": [
+        0,
+        74,
+        0
+      ],
+      "scale": [
+        1.2,
+        1.2,
+        1.2
+      ],
+      "props": {
+        "material": "holz",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr24",
+      "name": "Kiste 4",
+      "type": "box",
+      "pos": [
+        11,
+        0.6,
+        -3
+      ],
+      "rot": [
+        0,
+        21,
+        0
+      ],
+      "scale": [
+        1.2,
+        1.2,
+        1.2
+      ],
+      "props": {
+        "material": "holz",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr25",
+      "name": "Kiste 5",
+      "type": "box",
+      "pos": [
+        -4,
+        0.6,
+        -12
+      ],
+      "rot": [
+        0,
+        58,
+        0
+      ],
+      "scale": [
+        1.2,
+        1.2,
+        1.2
+      ],
+      "props": {
+        "material": "holz",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr26",
+      "name": "Kiste 6",
+      "type": "box",
+      "pos": [
+        5,
+        0.6,
+        -19
+      ],
+      "rot": [
+        0,
+        5,
+        0
+      ],
+      "scale": [
+        1.2,
+        1.2,
+        1.2
+      ],
+      "props": {
+        "material": "holz",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr27",
+      "name": "Kiste 7",
+      "type": "box",
+      "pos": [
+        -16,
+        0.6,
+        -20
+      ],
+      "rot": [
+        0,
+        42,
+        0
+      ],
+      "scale": [
+        1.2,
+        1.2,
+        1.2
+      ],
+      "props": {
+        "material": "holz",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr28",
+      "name": "Kiste 8",
+      "type": "box",
+      "pos": [
+        16,
+        0.6,
+        8
+      ],
+      "rot": [
+        0,
+        79,
+        0
+      ],
+      "scale": [
+        1.2,
+        1.2,
+        1.2
+      ],
+      "props": {
+        "material": "holz",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr29",
+      "name": "Kiste 9",
+      "type": "box",
+      "pos": [
+        -16,
+        0.6,
+        10
+      ],
+      "rot": [
+        0,
+        26,
+        0
+      ],
+      "scale": [
+        1.2,
+        1.2,
+        1.2
+      ],
+      "props": {
+        "material": "holz",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr30",
+      "name": "Kiste 10",
+      "type": "box",
+      "pos": [
+        22,
+        0.6,
+        -8
+      ],
+      "rot": [
+        0,
+        63,
+        0
+      ],
+      "scale": [
+        1.2,
+        1.2,
+        1.2
+      ],
+      "props": {
+        "material": "holz",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr31",
+      "name": "Kiste 11",
+      "type": "box",
+      "pos": [
+        -23,
+        0.6,
+        -6
+      ],
+      "rot": [
+        0,
+        10,
+        0
+      ],
+      "scale": [
+        1.2,
+        1.2,
+        1.2
+      ],
+      "props": {
+        "material": "holz",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr32",
+      "name": "Kiste 12",
+      "type": "box",
+      "pos": [
+        10,
+        0.6,
+        20
+      ],
+      "rot": [
+        0,
+        47,
+        0
+      ],
+      "scale": [
+        1.2,
+        1.2,
+        1.2
+      ],
+      "props": {
+        "material": "holz",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr33",
+      "name": "Wand hoch 1",
+      "type": "box",
+      "pos": [
+        -12,
+        1.5,
+        -10
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        3.5,
+        3,
+        0.4
+      ],
+      "props": {
+        "material": "wand_beton",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr34",
+      "name": "Wand hoch 2",
+      "type": "box",
+      "pos": [
+        12,
+        1.5,
+        -10
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        3.5,
+        3,
+        0.4
+      ],
+      "props": {
+        "material": "wand_beton",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr35",
+      "name": "Wand hoch 3",
+      "type": "box",
+      "pos": [
+        0,
+        1.5,
+        -4
+      ],
+      "rot": [
+        0,
+        90,
+        0
+      ],
+      "scale": [
+        3.5,
+        3,
+        0.4
+      ],
+      "props": {
+        "material": "wand_beton",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr36",
+      "name": "Wand hoch 4",
+      "type": "box",
+      "pos": [
+        -22,
+        1.5,
+        4
+      ],
+      "rot": [
+        0,
+        90,
+        0
+      ],
+      "scale": [
+        3.5,
+        3,
+        0.4
+      ],
+      "props": {
+        "material": "wand_beton",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr37",
+      "name": "Wand hoch 5",
+      "type": "box",
+      "pos": [
+        22,
+        1.5,
+        4
+      ],
+      "rot": [
+        0,
+        90,
+        0
+      ],
+      "scale": [
+        3.5,
+        3,
+        0.4
+      ],
+      "props": {
+        "material": "wand_beton",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr38",
+      "name": "Wand hoch 6",
+      "type": "box",
+      "pos": [
+        0,
+        1.5,
+        11
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        3.5,
+        3,
+        0.4
+      ],
+      "props": {
+        "material": "wand_beton",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr39",
+      "name": "Wand hoch 7",
+      "type": "box",
+      "pos": [
+        -10,
+        1.5,
+        22
+      ],
+      "rot": [
+        0,
+        90,
+        0
+      ],
+      "scale": [
+        3.5,
+        3,
+        0.4
+      ],
+      "props": {
+        "material": "wand_beton",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr40",
+      "name": "Wand hoch 8",
+      "type": "box",
+      "pos": [
+        10,
+        1.5,
+        22
+      ],
+      "rot": [
+        0,
+        90,
+        0
+      ],
+      "scale": [
+        3.5,
+        3,
+        0.4
+      ],
+      "props": {
+        "material": "wand_beton",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr41",
+      "name": "Pfeiler 1",
+      "type": "cylinder",
+      "pos": [
+        -6,
+        1.5,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        3,
+        1
+      ],
+      "props": {
+        "material": "beton_dunkel",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true,
+        "segments": 24
+      }
+    },
+    {
+      "id": "tr42",
+      "name": "Pfeiler 2",
+      "type": "cylinder",
+      "pos": [
+        6,
+        1.5,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        3,
+        1
+      ],
+      "props": {
+        "material": "beton_dunkel",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true,
+        "segments": 24
+      }
+    },
+    {
+      "id": "tr43",
+      "name": "Pfeiler 3",
+      "type": "cylinder",
+      "pos": [
+        -17,
+        1.5,
+        -4
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        3,
+        1
+      ],
+      "props": {
+        "material": "beton_dunkel",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true,
+        "segments": 24
+      }
+    },
+    {
+      "id": "tr44",
+      "name": "Pfeiler 4",
+      "type": "cylinder",
+      "pos": [
+        17,
+        1.5,
+        -4
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        3,
+        1
+      ],
+      "props": {
+        "material": "beton_dunkel",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true,
+        "segments": 24
+      }
+    },
+    {
+      "id": "tr45",
+      "name": "Pfeiler 5",
+      "type": "cylinder",
+      "pos": [
+        -5,
+        1.5,
+        -14
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        3,
+        1
+      ],
+      "props": {
+        "material": "beton_dunkel",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true,
+        "segments": 24
+      }
+    },
+    {
+      "id": "tr46",
+      "name": "Pfeiler 6",
+      "type": "cylinder",
+      "pos": [
+        5,
+        1.5,
+        -14
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        3,
+        1
+      ],
+      "props": {
+        "material": "beton_dunkel",
+        "color": "#ffffff",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true,
+        "segments": 24
+      }
+    },
+    {
+      "id": "tr47",
+      "name": "Container West",
+      "type": "box",
+      "pos": [
+        -21,
+        1.3,
+        -20
+      ],
+      "rot": [
+        0,
+        90,
+        0
+      ],
+      "scale": [
+        6,
+        2.6,
+        2.4
+      ],
+      "props": {
+        "material": "metall",
+        "color": "#4b5a46",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr48",
+      "name": "Container Ost",
+      "type": "box",
+      "pos": [
+        21,
+        1.3,
+        -20
+      ],
+      "rot": [
+        0,
+        90,
+        0
+      ],
+      "scale": [
+        6,
+        2.6,
+        2.4
+      ],
+      "props": {
+        "material": "metall",
+        "color": "#6b4a3a",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr49",
+      "name": "Container Mitte",
+      "type": "box",
+      "pos": [
+        -14,
+        1.3,
+        16
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        6,
+        2.6,
+        2.4
+      ],
+      "props": {
+        "material": "metall",
+        "color": "#3e4a5c",
+        "roughness": 0.75,
+        "metalness": 0,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true
+      }
+    },
+    {
+      "id": "tr50",
+      "name": "Mast 1",
+      "type": "cylinder",
+      "pos": [
+        -13.4,
+        2.2,
+        -14
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.14,
+        4.4,
+        0.14
+      ],
+      "props": {
+        "material": "metall",
+        "color": "#3a3d40",
+        "roughness": 0.45,
+        "metalness": 0.8,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true,
+        "segments": 24
+      }
+    },
+    {
+      "id": "tr51",
+      "name": "Licht 1",
+      "type": "lamp",
+      "pos": [
+        -14,
+        4.3,
+        -14
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {
+        "color": "#c8dcff",
+        "intensity": 34,
+        "distance": 18,
+        "shadow": true,
+        "flicker": false,
+        "on": true,
+        "tubeX": 0.35,
+        "tubeY": 0.06,
+        "tubeZ": 0.35,
+        "housing": true
+      }
+    },
+    {
+      "id": "tr52",
+      "name": "Mast 2",
+      "type": "cylinder",
+      "pos": [
+        14.6,
+        2.2,
+        -14
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.14,
+        4.4,
+        0.14
+      ],
+      "props": {
+        "material": "metall",
+        "color": "#3a3d40",
+        "roughness": 0.45,
+        "metalness": 0.8,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true,
+        "segments": 24
+      }
+    },
+    {
+      "id": "tr53",
+      "name": "Licht 2",
+      "type": "lamp",
+      "pos": [
+        14,
+        4.3,
+        -14
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {
+        "color": "#c8dcff",
+        "intensity": 26,
+        "distance": 18,
+        "shadow": false,
+        "flicker": false,
+        "on": true,
+        "tubeX": 0.35,
+        "tubeY": 0.06,
+        "tubeZ": 0.35,
+        "housing": true
+      }
+    },
+    {
+      "id": "tr54",
+      "name": "Mast 3",
+      "type": "cylinder",
+      "pos": [
+        -13.4,
+        2.2,
+        14
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.14,
+        4.4,
+        0.14
+      ],
+      "props": {
+        "material": "metall",
+        "color": "#3a3d40",
+        "roughness": 0.45,
+        "metalness": 0.8,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true,
+        "segments": 24
+      }
+    },
+    {
+      "id": "tr55",
+      "name": "Licht 3",
+      "type": "lamp",
+      "pos": [
+        -14,
+        4.3,
+        14
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {
+        "color": "#ffb070",
+        "intensity": 26,
+        "distance": 18,
+        "shadow": false,
+        "flicker": false,
+        "on": true,
+        "tubeX": 0.35,
+        "tubeY": 0.06,
+        "tubeZ": 0.35,
+        "housing": true
+      }
+    },
+    {
+      "id": "tr56",
+      "name": "Mast 4",
+      "type": "cylinder",
+      "pos": [
+        14.6,
+        2.2,
+        14
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.14,
+        4.4,
+        0.14
+      ],
+      "props": {
+        "material": "metall",
+        "color": "#3a3d40",
+        "roughness": 0.45,
+        "metalness": 0.8,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true,
+        "segments": 24
+      }
+    },
+    {
+      "id": "tr57",
+      "name": "Licht 4",
+      "type": "lamp",
+      "pos": [
+        14,
+        4.3,
+        14
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {
+        "color": "#c8dcff",
+        "intensity": 34,
+        "distance": 18,
+        "shadow": true,
+        "flicker": false,
+        "on": true,
+        "tubeX": 0.35,
+        "tubeY": 0.06,
+        "tubeZ": 0.35,
+        "housing": true
+      }
+    },
+    {
+      "id": "tr58",
+      "name": "Mast 5",
+      "type": "cylinder",
+      "pos": [
+        0.6,
+        2.2,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.14,
+        4.4,
+        0.14
+      ],
+      "props": {
+        "material": "metall",
+        "color": "#3a3d40",
+        "roughness": 0.45,
+        "metalness": 0.8,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true,
+        "segments": 24
+      }
+    },
+    {
+      "id": "tr59",
+      "name": "Licht 5",
+      "type": "lamp",
+      "pos": [
+        0,
+        4.3,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {
+        "color": "#c8dcff",
+        "intensity": 34,
+        "distance": 18,
+        "shadow": true,
+        "flicker": false,
+        "on": true,
+        "tubeX": 0.35,
+        "tubeY": 0.06,
+        "tubeZ": 0.35,
+        "housing": true
+      }
+    },
+    {
+      "id": "tr60",
+      "name": "Mast 6",
+      "type": "cylinder",
+      "pos": [
+        0.6,
+        2.2,
+        -24
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.14,
+        4.4,
+        0.14
+      ],
+      "props": {
+        "material": "metall",
+        "color": "#3a3d40",
+        "roughness": 0.45,
+        "metalness": 0.8,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true,
+        "segments": 24
+      }
+    },
+    {
+      "id": "tr61",
+      "name": "Licht 6",
+      "type": "lamp",
+      "pos": [
+        0,
+        4.3,
+        -24
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {
+        "color": "#ffb070",
+        "intensity": 26,
+        "distance": 18,
+        "shadow": false,
+        "flicker": false,
+        "on": true,
+        "tubeX": 0.35,
+        "tubeY": 0.06,
+        "tubeZ": 0.35,
+        "housing": true
+      }
+    },
+    {
+      "id": "tr62",
+      "name": "Mast 7",
+      "type": "cylinder",
+      "pos": [
+        -23.4,
+        2.2,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.14,
+        4.4,
+        0.14
+      ],
+      "props": {
+        "material": "metall",
+        "color": "#3a3d40",
+        "roughness": 0.45,
+        "metalness": 0.8,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true,
+        "segments": 24
+      }
+    },
+    {
+      "id": "tr63",
+      "name": "Licht 7",
+      "type": "lamp",
+      "pos": [
+        -24,
+        4.3,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {
+        "color": "#c8dcff",
+        "intensity": 26,
+        "distance": 18,
+        "shadow": false,
+        "flicker": false,
+        "on": true,
+        "tubeX": 0.35,
+        "tubeY": 0.06,
+        "tubeZ": 0.35,
+        "housing": true
+      }
+    },
+    {
+      "id": "tr64",
+      "name": "Mast 8",
+      "type": "cylinder",
+      "pos": [
+        24.6,
+        2.2,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        0.14,
+        4.4,
+        0.14
+      ],
+      "props": {
+        "material": "metall",
+        "color": "#3a3d40",
+        "roughness": 0.45,
+        "metalness": 0.8,
+        "emissive": "#000000",
+        "emissiveIntensity": 0,
+        "uvScale": 1,
+        "castShadow": true,
+        "collision": true,
+        "segments": 24
+      }
+    },
+    {
+      "id": "tr65",
+      "name": "Licht 8",
+      "type": "lamp",
+      "pos": [
+        24,
+        4.3,
+        0
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {
+        "color": "#c8dcff",
+        "intensity": 26,
+        "distance": 18,
+        "shadow": false,
+        "flicker": false,
+        "on": true,
+        "tubeX": 0.35,
+        "tubeY": 0.06,
+        "tubeZ": 0.35,
+        "housing": true
+      }
+    },
+    {
+      "id": "tr66",
+      "name": "Player Start",
+      "type": "spawn",
+      "pos": [
+        0,
+        0,
+        23
+      ],
+      "rot": [
+        0,
+        0,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {}
+    },
+    {
+      "id": "tr67",
+      "name": "NPC-Spawn 1",
+      "type": "npcspawn",
+      "pos": [
+        -24,
+        0,
+        -24
+      ],
+      "rot": [
+        0,
+        135,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {}
+    },
+    {
+      "id": "tr68",
+      "name": "NPC-Spawn 2",
+      "type": "npcspawn",
+      "pos": [
+        0,
+        0,
+        -25
+      ],
+      "rot": [
+        0,
+        180,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {}
+    },
+    {
+      "id": "tr69",
+      "name": "NPC-Spawn 3",
+      "type": "npcspawn",
+      "pos": [
+        24,
+        0,
+        -24
+      ],
+      "rot": [
+        0,
+        225,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {}
+    },
+    {
+      "id": "tr70",
+      "name": "NPC-Spawn 4",
+      "type": "npcspawn",
+      "pos": [
+        -25,
+        0,
+        -12
+      ],
+      "rot": [
+        0,
+        90,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {}
+    },
+    {
+      "id": "tr71",
+      "name": "NPC-Spawn 5",
+      "type": "npcspawn",
+      "pos": [
+        25,
+        0,
+        -12
+      ],
+      "rot": [
+        0,
+        270,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {}
+    },
+    {
+      "id": "tr72",
+      "name": "NPC-Spawn 6",
+      "type": "npcspawn",
+      "pos": [
+        -25,
+        0,
+        8
+      ],
+      "rot": [
+        0,
+        90,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {}
+    },
+    {
+      "id": "tr73",
+      "name": "NPC-Spawn 7",
+      "type": "npcspawn",
+      "pos": [
+        25,
+        0,
+        8
+      ],
+      "rot": [
+        0,
+        270,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {}
+    },
+    {
+      "id": "tr74",
+      "name": "NPC-Spawn 8",
+      "type": "npcspawn",
+      "pos": [
+        -12,
+        0,
+        -25
+      ],
+      "rot": [
+        0,
+        180,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {}
+    },
+    {
+      "id": "tr75",
+      "name": "NPC-Spawn 9",
+      "type": "npcspawn",
+      "pos": [
+        12,
+        0,
+        -25
+      ],
+      "rot": [
+        0,
+        180,
+        0
+      ],
+      "scale": [
+        1,
+        1,
+        1
+      ],
+      "props": {}
+    }
+  ]
+}

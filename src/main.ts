@@ -31,6 +31,7 @@ import { landscapeOf } from './world/landscape/asset.ts';
 import { SCALE } from './world/collision.ts';
 import { LoadingScreen } from './ui/loadingScreen.ts';
 import { ThirdPersonCam } from './dev/thirdPerson.ts';
+import { TrainingMode } from './ai/training.ts';
 
 const FOG_MIN = 5;
 const FOG_MAX = 60;
@@ -156,7 +157,9 @@ await loading.step(0.7, 'Spieler, Wetter & Scripts …');
 const player = new PlayerController(camera, document.body, physics, level.spawn, input, settings, level.spawnYaw);
 // Spielerkörper aus Würfeln; hält die Taschenlampe in der linken Hand
 const body = new PlayerBody(scene, physics);
-const shooter = new Shooter(scene, [level.group]);
+// Ziel-Liste des Spielers (der Trainingsmodus ergänzt die NPC-Körper)
+const shotTargets: THREE.Object3D[] = [level.group];
+const shooter = new Shooter(scene, shotTargets);
 // Wetter: Niederschlag, nasser Boden, Pfützen mit Spiegelungen
 body.root.userData.noWeather = true;
 const weather = new Weather(renderer, scene, level.world);
@@ -179,6 +182,18 @@ volumeFX.setColliders(level.colliders, world.groundPlane);
 const thirdPerson = import.meta.env.DEV ? new ThirdPersonCam(physics) : null;
 let shots = 0;
 let lastShot = '–';
+let glitch = 0;
+// Trainingsmodus (Map mit NPC-Spawnpunkten): Gegner-KI, Gesundheit, Wellen
+const training = TrainingMode.create({
+  scene,
+  physics,
+  settings,
+  level,
+  player,
+  playerBody: body,
+  playerTargets: shotTargets,
+  onPlayerHurt: (s) => (glitch = Math.min(1, glitch + s)),
+});
 
 // --- Terminal (Hauptmenü im Bildschirm), Position kommt aus der Map ---
 let terminal: Terminal | null = null;
@@ -422,7 +437,6 @@ for (const k of ['brightness', 'fogEnabled', 'viewDistance', 'bloom', 'renderSca
   applySetting(k);
 }
 
-let glitch = 0;
 let menuBlend = 0;
 
 // --- Eingabe ---
@@ -457,9 +471,10 @@ window.addEventListener('mousedown', (e) => {
     activeScreen.rt.pointerDown();
     return;
   }
-  if (player.hasFocus) return;
+  if (player.hasFocus || training?.playerDead) return;
   shots++;
   const result = shooter.fire(camera, body.getMuzzle(camera));
+  training?.playerShot(camera.getWorldPosition(new THREE.Vector3()), camera.getWorldDirection(new THREE.Vector3()), result);
   player.kick();
   body.kick();
   glitch = Math.min(1, glitch + 0.55);
@@ -592,9 +607,11 @@ renderer.setAnimationLoop(() => {
     gs.surf.texture.needsUpdate = true;
   }
   camera.updateMatrixWorld();
-  body.setRelaxed(uiActive());
+  body.setRelaxed(uiActive() || !!training?.playerDead);
   const anim = player.getAnimState();
   body.update(dt, anim, camera);
+  // Gegner pausieren, solange das Spiel nicht läuft (Pointer Lock aus, Terminal/Bildschirm offen)
+  if (training && player.isLocked && !uiActive()) training.update(dt);
   if (weatherNode && !weatherNode.root.quaternion.equals(weatherQuat)) applyWeather();
   weather.trackFeet(player.feet, anim.onGround);
   weather.update(dt, t, camera);

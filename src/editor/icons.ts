@@ -84,6 +84,7 @@ export const TYPE_ICONS: Record<string, string> = {
   smoke: 'smoke',
   sparks: 'sparks',
   spawn: 'flag',
+  npcspawn: 'flag',
   trigger: 'trigger',
   terminal: 'monitor',
   screen: 'monitor',

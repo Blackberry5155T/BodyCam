@@ -1,6 +1,7 @@
 import { normalizeMap, type MapData } from '../world/mapFormat.ts';
 import { NO_BLOBS, UrlBlobs, type BlobSource } from '../world/blobStore.ts';
 import startMap from './start.json';
+import trainingMap from './training.json';
 
 // Mitgelieferte Maps, zwei Quellen:
 //  - kleine Maps ohne Binär-Daten: JSON in src/maps/<id>.json, hier eintragen (im Editor „Als JSON exportieren“)
@@ -8,6 +9,7 @@ import startMap from './start.json';
 // Aufruf im Spiel: /?map=<id>
 export const MAPS: Record<string, MapData> = {
   start: normalizeMap(startMap),
+  training: normalizeMap(trainingMap),
 };
 
 export interface BundledMap {

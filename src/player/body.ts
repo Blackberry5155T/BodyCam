@@ -98,6 +98,15 @@ const AIM_DISTANCE = 15; // Konvergenzpunkt der Waffe auf der Blickachse
 const CAMERA_DROP = 0.3; // wie im Controller
 
 const FLASHLIGHT_INTENSITY = 45;
+const NPC_FLASHLIGHT_INTENSITY = 30;
+
+/** Trefferzone eines Körperteils (userData.hitZone), für Schadensberechnung */
+export type HitZone = 'head' | 'torso' | 'limb';
+
+export interface BodyOptions {
+  /** NPC-Körper: eigene Farben, sichtbarer Kopf, Taschenlampe ohne Schatten (spart Shadow-Pässe) */
+  npc?: boolean;
+}
 
 const damp = (current: number, target: number, rate: number, dt: number) =>
   current + (target - current) * (1 - Math.exp(-rate * dt));
@@ -189,14 +198,18 @@ export class PlayerBody {
   private gait = 0; // 0 = Stand, 1 = Gangzyklus aktiv
   private grade = 0; // Steigung entlang der Bewegung (Höhe/Strecke), Treppen und Hänge
   private lastRootY = Number.NaN;
+  private lampIntensity = FLASHLIGHT_INTENSITY;
+  private meshes: THREE.Mesh[] = [];
 
   constructor(
     scene: THREE.Scene,
     private physics: PhysicsWorld | null = null,
+    opts: BodyOptions = {},
   ) {
-    const jacket = new THREE.MeshStandardMaterial({ color: 0x2a3038, roughness: 0.85 });
-    const vest = new THREE.MeshStandardMaterial({ color: 0x23282b, roughness: 0.8 });
-    const pants = new THREE.MeshStandardMaterial({ color: 0x2c2f33, roughness: 0.9 });
+    const npc = !!opts.npc;
+    const jacket = new THREE.MeshStandardMaterial({ color: npc ? 0x4a4632 : 0x2a3038, roughness: 0.85 });
+    const vest = new THREE.MeshStandardMaterial({ color: npc ? 0x5a4a30 : 0x23282b, roughness: 0.8 });
+    const pants = new THREE.MeshStandardMaterial({ color: npc ? 0x3a3a2c : 0x2c2f33, roughness: 0.9 });
     const gloves = new THREE.MeshStandardMaterial({ color: 0x161616, roughness: 0.7 });
     const boots = new THREE.MeshStandardMaterial({ color: 0x121212, roughness: 0.6 });
     // Kopf: in der eigenen Kamera unsichtbar, wirft aber Schatten
@@ -271,15 +284,50 @@ export class PlayerBody {
     this.torchMeshes.push(lens);
 
     // Spotlight bleibt immer in der Szene, nur Intensität wird geschaltet → kein Shader-Recompile
-    this.flashlight = new THREE.SpotLight(0xfff0dc, FLASHLIGHT_INTENSITY, 30, 0.42, 0.55, 2);
+    this.lampIntensity = npc ? NPC_FLASHLIGHT_INTENSITY : FLASHLIGHT_INTENSITY;
+    this.flashlight = new THREE.SpotLight(0xfff0dc, this.lampIntensity, 30, 0.42, 0.55, 2);
     this.flashlight.position.z = 0.09;
-    setupLightShadow(this.flashlight, 1024);
-    this.flashlight.shadow.radius = 1;
+    if (!npc) {
+      setupLightShadow(this.flashlight, 1024);
+      this.flashlight.shadow.radius = 1;
+    }
     this.torch.add(this.flashlight);
     this.flashlight.target = this.flashTarget;
     scene.add(this.flashTarget);
 
     scene.add(this.root);
+
+    // Trefferzonen: Kopf, Rumpf, sonst Gliedmaßen/Ausrüstung
+    this.root.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      this.meshes.push(m);
+      m.userData.hitZone = m === head ? 'head' : m === this.torso.mesh ? 'torso' : 'limb';
+    });
+    if (npc) this.setThirdPerson(true);
+  }
+
+  /** Körper ein-/ausblenden (Pool für NPCs). Das Licht bleibt in der Szene (nur Intensität 0) → kein Shader-Recompile */
+  setHidden(hidden: boolean): void {
+    for (const m of this.meshes) m.visible = !hidden;
+    if (hidden) {
+      this.flashlight.intensity = 0;
+      this.torchLens.emissiveIntensity = 0;
+    }
+  }
+
+  setFlashlight(on: boolean): void {
+    this.flashlightOn = on;
+  }
+
+  /** Körper-Pose zurücksetzen (Respawn: Füße/Schrittphase neu aufsetzen) */
+  resetPose(): void {
+    this.ground[0].init = false;
+    this.ground[1].init = false;
+    this.lastRootY = Number.NaN;
+    this.aimPoint.set(0, 0, 0);
+    this.pelvisDrop = 0;
+    this.root.rotation.set(0, 0, 0);
   }
 
   /** Dev-Third-Person: Kopf sichtbar machen (in der Bodycam nur Schatten) */
@@ -575,7 +623,7 @@ export class PlayerBody {
 
     // --- Taschenlampe ---
     // Nur die Meshes ausblenden — das Licht selbst muss sichtbar bleiben (sonst Shader-Recompile)
-    for (const m of this.torchMeshes) m.visible = fb > 0.05;
+    for (const m of this.torchMeshes) m.visible = fb > 0.05 && this.head.visible;
     // Zielpunkt folgt dem Blick mit leichter Verzögerung (Handführung)
     const camPos = _v.set(0, 0, 0);
     const camDir = _v2.set(0, 0, 0);
@@ -587,14 +635,14 @@ export class PlayerBody {
     // Grundversatz: Lichtkegel sitzt tiefer; beim Sprinten vor die Füße,
     // auch am Terminal: nicht auf den spiegelnden Bildschirm leuchten
     const target = _v.copy(this.aimPoint);
-    target.y -= 3 + (this.sprintBlend + this.relaxBlend) * 6;
+    target.y -= 5.5 + (this.sprintBlend + this.relaxBlend) * 6;
     this.flashTarget.position.copy(target);
     this.root.updateMatrixWorld(true);
     this.torch.lookAt(target);
 
     const on = Math.max(0, (fb - 0.6) / 0.4);
     const flicker = 0.97 + Math.sin(t * 31) * 0.015 + Math.sin(t * 57) * 0.015;
-    this.flashlight.intensity = FLASHLIGHT_INTENSITY * on * flicker;
+    this.flashlight.intensity = this.lampIntensity * on * flicker;
     this.torchLens.emissiveIntensity = 4 * on;
   }
 
