@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { AssetContext, AssetDef, AssetInstance } from '../assets.ts';
 import type { MapObjectData, PropValue } from '../mapFormat.ts';
 import { blobRef, parseBlobRef, type BlobSource } from '../blobStore.ts';
-import { COMPONENT_QUADS, LandscapeData, MAX_QUADS, decodeHeights, decodeHoles, encodeHeights, encodeHoles } from './data.ts';
+import { COMPONENT_QUADS, HOLE_SUBS, LandscapeData, MAX_QUADS, decodeHeights, decodeHoles, encodeHeights, encodeHoles } from './data.ts';
 import { LandscapeRenderer, type LandscapeLook } from './render.ts';
 import { LandscapeColliders } from './collision.ts';
 
@@ -44,6 +44,12 @@ function look(o: MapObjectData): LandscapeLook {
   return { grass: str(o, 'grassColor') || '#4d5a32', rock: str(o, 'rockColor') || '#6b655c', slope: num(o, 'slope', 38) };
 }
 
+/** gespeicherte Loch-Auflösung (gilt, solange keine Lochdaten vorliegen) */
+function holeRes(o: MapObjectData): number {
+  const v = num(o, 'holeRes', 1);
+  return (HOLE_SUBS as readonly number[]).includes(v) ? v : 1;
+}
+
 function matches(d: LandscapeData, o: MapObjectData): boolean {
   const { cx, cz, q } = dims(o);
   return d.compX === cx && d.compZ === cz && d.quadSize === q;
@@ -74,6 +80,7 @@ async function loadData(o: MapObjectData, blobs: BlobSource | undefined): Promis
   const oid = parseBlobRef(o.props.holes);
   let heights: Float32Array | undefined;
   let holes: Uint8Array | undefined;
+  let sub = holeRes(o);
   const W = cx * COMPONENT_QUADS;
   const H = cz * COMPONENT_QUADS;
   if (hid) {
@@ -83,9 +90,9 @@ async function loadData(o: MapObjectData, blobs: BlobSource | undefined): Promis
   }
   if (oid) {
     const bytes = await blobs?.get(oid);
-    if (bytes) holes = decodeHoles(bytes, W, H);
+    if (bytes) ({ holes, sub } = decodeHoles(bytes, W, H));
   }
-  return new LandscapeData(cx, cz, q, heights, holes);
+  return new LandscapeData(cx, cz, q, heights, holes, sub);
 }
 
 function makeEntry(o: MapObjectData, data: LandscapeData): LandscapeEntry {
@@ -133,7 +140,7 @@ function acquireSync(o: MapObjectData): LandscapeEntry | null {
   }
   // Leer und ohne Blob: flach
   if (!parseBlobRef(o.props.height) && !parseBlobRef(o.props.holes)) {
-    const e = makeEntry(o, new LandscapeData(dims(o).cx, dims(o).cz, dims(o).q));
+    const e = makeEntry(o, new LandscapeData(dims(o).cx, dims(o).cz, dims(o).q, undefined, undefined, holeRes(o)));
     cache.set(o.id, e);
     return e;
   }
@@ -157,6 +164,7 @@ export async function flushLandscapes(objects: MapObjectData[], put: (bytes: Uin
     // Auch ohne Änderung: JSON-Undo kann alte Verweise zurückgebracht haben
     o.props.height = e.heightRef;
     o.props.holes = e.holesRef;
+    o.props.holeRes = e.data.holeSub;
   }
   return written;
 }
@@ -174,6 +182,7 @@ export const LANDSCAPE_ASSET: AssetDef = {
     { key: 'quadSize', label: 'Quad-Größe (m)', type: 'number', default: 1, hidden: true },
     { key: 'height', label: 'Höhendaten', type: 'text', default: '', hidden: true },
     { key: 'holes', label: 'Löcher', type: 'text', default: '', hidden: true },
+    { key: 'holeRes', label: 'Loch-Auflösung', type: 'number', default: 1, hidden: true },
     { key: 'dataId', label: 'Daten-ID', type: 'text', default: '', hidden: true },
     { key: 'grassColor', label: 'Gras', type: 'color', default: '#4d5a32', group: 'Material (vorläufig)' },
     { key: 'rockColor', label: 'Fels', type: 'color', default: '#6b655c', group: 'Material (vorläufig)' },
@@ -240,7 +249,7 @@ export const LANDSCAPE_ASSET: AssetDef = {
 
 /** Startwerte für eine neue Landscape */
 export function landscapeProps(compX: number, compZ: number, quadSize: number, dataId: string): Record<string, PropValue> {
-  return { compX, compZ, quadSize, height: '', holes: '', dataId, grassColor: '#4d5a32', rockColor: '#6b655c', slope: 38 };
+  return { compX, compZ, quadSize, height: '', holes: '', holeRes: 1, dataId, grassColor: '#4d5a32', rockColor: '#6b655c', slope: 38 };
 }
 
 /** Landscape-Daten eines gebauten Objekts (Spiel: Scripts, Spawn-Höhe) */

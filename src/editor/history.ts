@@ -33,16 +33,23 @@ export const TILE = 64;
 export class GridRecorder {
   private before = new Map<number, Uint8Array>();
   private readonly tilesX: number;
+  private readonly source: Grid | (() => Grid);
 
   constructor(
-    private readonly data: Grid,
+    /** Raster oder Funktion, die das aktuelle Raster liefert (falls es ersetzt werden kann, z. B. bei Auflösungswechsel) */
+    data: Grid | (() => Grid),
     private readonly width: number,
     private readonly height: number,
     private readonly channels = 1,
     /** Nach Undo/Redo: geänderten Bereich neu hochladen (Textur, Kollision …) */
     private readonly onChange: (rect: GridRect) => void = () => {},
   ) {
+    this.source = data;
     this.tilesX = Math.ceil(width / TILE);
+  }
+
+  private get data(): Grid {
+    return typeof this.source === 'function' ? this.source() : this.source;
   }
 
   /** Bereich wird gleich geändert → betroffene Kacheln einmalig sichern */

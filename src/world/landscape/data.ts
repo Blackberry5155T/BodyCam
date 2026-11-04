@@ -5,12 +5,18 @@ import { deflateSync, inflateSync } from 'fflate';
 // Koordinaten: lokales Raster, Ursprung = Mitte der Landscape (Objektposition), x nach +X, z nach +Z.
 // Gitterpunkt (ix, iz) liegt bei ((ix - W/2) · q, h, (iz - H/2) · q).
 // heights: (W+1)·(H+1) Werte, zeilenweise (iz · (W+1) + ix), Meter relativ zur Objekthöhe.
-// holes: W·H Quads, 1 = Loch (kein Rendering, keine Kollision).
+// holes: Loch-Zellen, 1 = Loch (kein Rendering, keine Kollision). Jedes Quad ist in holeSub × holeSub Zellen
+// geteilt (Loch-Auflösung, je Landscape einstellbar): HW = W · holeSub Zellen je Zeile, HH = H · holeSub Zeilen.
 
 export const COMPONENT_QUADS = 128;
 /** Kantenlänge eines Min/Max-Blocks (= kleinster CDLOD-Knoten) in Quads */
 export const BLOCK = 32;
 export const MAX_QUADS = 8192;
+/** mögliche Loch-Unterteilungen je Quad-Kante */
+export const HOLE_SUBS = [1, 2, 4, 8] as const;
+/** Obergrenzen für das Loch-Raster (1 Byte je Zelle in CPU + GPU; maximale Texturgröße) */
+export const MAX_HOLE_CELLS = 1 << 26;
+export const MAX_HOLE_DIM = 16384;
 
 export interface Rect {
   x: number;
@@ -19,7 +25,8 @@ export interface Rect {
   h: number;
 }
 
-export type ChangeKind = 'height' | 'holes';
+/** height: Rechteck in Gitterpunkten · holes: in Loch-Zellen · holeRes: Loch-Auflösung geändert (ganze Fläche) */
+export type ChangeKind = 'height' | 'holes' | 'holeRes';
 export type ChangeListener = (r: Rect, kind: ChangeKind) => void;
 
 export class LandscapeData {
@@ -28,10 +35,12 @@ export class LandscapeData {
   readonly VW: number;
   readonly VH: number;
   readonly heights: Float32Array;
-  readonly holes: Uint8Array;
+  holes: Uint8Array;
+  /** Loch-Zellen je Quad-Kante (1, 2, 4, 8) */
+  holeSub: number;
   /** Min/Max je BLOCK×BLOCK-Quads, Pyramide: Stufe 0 = Blöcke, jede weitere Stufe halbiert */
   readonly minMax: { w: number; h: number; min: Float32Array; max: Float32Array }[] = [];
-  /** Anzahl Löcher je Komponente (für Kollision: Heightfield oder Trimesh) */
+  /** Anzahl Loch-Zellen je Komponente (für Kollision: Heightfield oder Trimesh) */
   readonly compHoles: Uint32Array;
   readonly compX: number;
   readonly compZ: number;
@@ -45,6 +54,7 @@ export class LandscapeData {
     public quadSize: number,
     heights?: Float32Array,
     holes?: Uint8Array,
+    holeSub = 1,
   ) {
     this.compX = compX;
     this.compZ = compZ;
@@ -53,7 +63,9 @@ export class LandscapeData {
     this.VW = this.W + 1;
     this.VH = this.H + 1;
     this.heights = heights ?? new Float32Array(this.VW * this.VH);
-    this.holes = holes ?? new Uint8Array(this.W * this.H);
+    this.holeSub = holeSub;
+    this.holes = holes ?? new Uint8Array(this.HW * this.HH);
+    if (this.holes.length !== this.HW * this.HH) throw new Error('Lochdaten passen nicht zur Loch-Auflösung');
     this.compHoles = new Uint32Array(compX * compZ);
     let bw = this.W / BLOCK;
     let bh = this.H / BLOCK;
@@ -64,7 +76,40 @@ export class LandscapeData {
       bh = Math.ceil(bh / 2);
     }
     this.updateBounds({ x: 0, y: 0, w: this.VW, h: this.VH });
-    this.updateHoleCounts({ x: 0, y: 0, w: this.W, h: this.H });
+    this.updateHoleCounts({ x: 0, y: 0, w: this.HW, h: this.HH });
+  }
+
+  /** Loch-Zellen je Zeile / Anzahl Zeilen */
+  get HW(): number {
+    return this.W * this.holeSub;
+  }
+  get HH(): number {
+    return this.H * this.holeSub;
+  }
+
+  /** Feinste Loch-Auflösung, die für diese Landscape-Größe erlaubt ist */
+  maxHoleSub(): number {
+    let best = 1;
+    for (const s of HOLE_SUBS) if (this.W * s * this.H * s <= MAX_HOLE_CELLS && Math.max(this.W, this.H) * s <= MAX_HOLE_DIM) best = s;
+    return best;
+  }
+
+  /**
+   * Loch-Auflösung ändern. Ohne `holes` wird das bestehende Raster umgerechnet (feiner: exakt;
+   * gröber: Zelle wird Loch, wenn mindestens die Hälfte ihrer Teilzellen Loch war).
+   */
+  setHoleSub(sub: number, holes?: Uint8Array): void {
+    if (sub === this.holeSub && !holes) return;
+    const nw = this.W * sub;
+    const nh = this.H * sub;
+    const out = holes ?? resampleHoles(this.holes, this.HW, this.HH, this.holeSub, sub);
+    if (out.length !== nw * nh) throw new Error('Lochdaten passen nicht zur Loch-Auflösung');
+    this.holeSub = sub;
+    this.holes = out;
+    this.revision++;
+    const full = { x: 0, y: 0, w: nw, h: nh };
+    this.updateHoleCounts(full);
+    for (const fn of this.listeners) fn(full, 'holeRes');
   }
 
   get sizeX(): number {
@@ -75,7 +120,7 @@ export class LandscapeData {
   }
 
   clone(): LandscapeData {
-    return new LandscapeData(this.compX, this.compZ, this.quadSize, this.heights.slice(), this.holes.slice());
+    return new LandscapeData(this.compX, this.compZ, this.quadSize, this.heights.slice(), this.holes.slice(), this.holeSub);
   }
 
   onChange(fn: ChangeListener): () => void {
@@ -83,9 +128,9 @@ export class LandscapeData {
     return () => this.listeners.delete(fn);
   }
 
-  /** Nach Änderungen an heights/holes aufrufen (Rechteck in Gitterpunkten bzw. Quads) */
-  changed(r: Rect, kind: ChangeKind = 'height'): void {
-    const c = this.clip(r, kind === 'height' ? this.VW : this.W, kind === 'height' ? this.VH : this.H);
+  /** Nach Änderungen an heights/holes aufrufen (Rechteck in Gitterpunkten bzw. Loch-Zellen) */
+  changed(r: Rect, kind: 'height' | 'holes' = 'height'): void {
+    const c = this.clip(r, kind === 'height' ? this.VW : this.HW, kind === 'height' ? this.VH : this.HH);
     if (!c) return;
     this.revision++;
     if (kind === 'height') this.updateBounds(c);
@@ -161,16 +206,18 @@ export class LandscapeData {
   }
 
   private updateHoleCounts(r: Rect): void {
-    const cx0 = Math.floor(r.x / COMPONENT_QUADS);
-    const cy0 = Math.floor(r.y / COMPONENT_QUADS);
-    const cx1 = Math.floor((r.x + r.w - 1) / COMPONENT_QUADS);
-    const cy1 = Math.floor((r.y + r.h - 1) / COMPONENT_QUADS);
+    const C = COMPONENT_QUADS * this.holeSub;
+    const HW = this.HW;
+    const cx0 = Math.floor(r.x / C);
+    const cy0 = Math.floor(r.y / C);
+    const cx1 = Math.floor((r.x + r.w - 1) / C);
+    const cy1 = Math.floor((r.y + r.h - 1) / C);
     for (let cy = cy0; cy <= cy1; cy++) {
       for (let cx = cx0; cx <= cx1; cx++) {
         let n = 0;
-        for (let z = cy * COMPONENT_QUADS; z < (cy + 1) * COMPONENT_QUADS; z++) {
-          const row = z * this.W;
-          for (let x = cx * COMPONENT_QUADS; x < (cx + 1) * COMPONENT_QUADS; x++) n += this.holes[row + x];
+        for (let z = cy * C; z < (cy + 1) * C; z++) {
+          const row = z * HW;
+          for (let x = cx * C; x < (cx + 1) * C; x++) n += this.holes[row + x];
         }
         this.compHoles[cy * this.compX + cx] = n;
       }
@@ -213,9 +260,25 @@ export class LandscapeData {
     return this.heights[iz * this.VW + ix];
   }
 
-  isHole(qx: number, qz: number): boolean {
-    if (qx < 0 || qz < 0 || qx >= this.W || qz >= this.H) return true;
-    return this.holes[qz * this.W + qx] !== 0;
+  /** Loch an einer Gitterkoordinate (1 = ein Quad); außerhalb = Loch */
+  holeAtGrid(gx: number, gz: number): boolean {
+    if (!(gx >= 0 && gz >= 0 && gx <= this.W && gz <= this.H)) return true;
+    const s = this.holeSub;
+    const cx = Math.min(this.HW - 1, Math.floor(gx * s));
+    const cz = Math.min(this.HH - 1, Math.floor(gz * s));
+    return this.holes[cz * this.HW + cx] !== 0;
+  }
+
+  /** 0 = Quad ohne Loch, 1 = teilweise, 2 = ganz Loch */
+  quadHoleState(qx: number, qz: number): 0 | 1 | 2 {
+    const s = this.holeSub;
+    const HW = this.HW;
+    let n = 0;
+    for (let y = 0; y < s; y++) {
+      const row = (qz * s + y) * HW + qx * s;
+      for (let x = 0; x < s; x++) n += this.holes[row + x];
+    }
+    return n === 0 ? 0 : n === s * s ? 2 : 1;
   }
 
   /** Höhe an einer Gitterkoordinate (gleiche Dreiecksteilung wie Render/Kollision) */
@@ -239,7 +302,7 @@ export class LandscapeData {
     const gx = this.toGridX(x);
     const gz = this.toGridZ(z);
     if (gx < 0 || gz < 0 || gx > this.W || gz > this.H) return null;
-    if (this.isHole(Math.min(this.W - 1, Math.floor(gx)), Math.min(this.H - 1, Math.floor(gz)))) return null;
+    if (this.holeAtGrid(gx, gz)) return null;
     return this.heightAtGrid(gx, gz);
   }
 
@@ -256,8 +319,10 @@ export class LandscapeData {
   /**
    * Strahl (lokale Koordinaten) gegen das Höhenfeld; liefert Abstand (in Einheiten von dir) + Normale.
    * Grobe Suche über die Min/Max-Blöcke, dann Quads entlang des Strahls (2D-DDA), je Quad zwei Dreiecke.
+   * `throughHoles`: Löcher zählen als Fläche (Editor: Löcher wieder füllen).
    */
-  raycast(origin: THREE.Vector3, dir: THREE.Vector3, maxDist = Infinity): { t: number; normal: THREE.Vector3 } | null {
+  raycast(origin: THREE.Vector3, dir: THREE.Vector3, maxDist = Infinity, throughHoles = false): { t: number; normal: THREE.Vector3 } | null {
+    this._solid = throughHoles;
     const q = this.quadSize;
     // In Gitterraum (x, z in Quads, y in Metern)
     const ox = origin.x / q + this.W / 2;
@@ -330,7 +395,7 @@ export class LandscapeData {
     let t = tStart;
     let guard = 0;
     while (t <= tEnd + 1e-6 && guard++ < 4096) {
-      if (qx >= 0 && qz >= 0 && qx < this.W && qz < this.H && !this.holes[qz * this.W + qx]) {
+      if (qx >= 0 && qz >= 0 && qx < this.W && qz < this.H && (this._solid || (this.holeSub === 1 ? !this.holes[qz * this.W + qx] : this.quadHoleState(qx, qz) !== 2))) {
         const hit = this.rayQuad(qx, qz, ox, oz, oy, dx, dz, dy);
         if (hit) return hit;
       }
@@ -347,6 +412,8 @@ export class LandscapeData {
     return null;
   }
 
+  /** laufender raycast ignoriert Löcher */
+  private _solid = false;
   private _a = new THREE.Vector3();
   private _b = new THREE.Vector3();
   private _c = new THREE.Vector3();
@@ -376,6 +443,8 @@ export class LandscapeData {
     ] as const) {
       const hit = ray.intersectTriangle(p0, p1, p2, false, this._hit);
       if (!hit) continue;
+      // feine Löcher: Treffer in einer Loch-Zelle zählt nicht
+      if (!this._solid && this.holeSub > 1 && this.holeAtGrid(hit.x / q, hit.z / q)) continue;
       const tt = hit.distanceTo(ray.origin);
       if (tt < bestT) {
         bestT = tt;
@@ -460,8 +529,42 @@ export function encodeHoles(d: LandscapeData): Uint8Array | null {
   return any ? deflateSync(d.holes, { level: 6 }) : null;
 }
 
-export function decodeHoles(bytes: Uint8Array, W: number, H: number): Uint8Array {
+/** Lochdaten lesen; die Loch-Auflösung ergibt sich aus der Länge (ältere Maps: eine Zelle je Quad) */
+export function decodeHoles(bytes: Uint8Array, W: number, H: number): { holes: Uint8Array; sub: number } {
   const raw = inflateSync(bytes);
-  if (raw.length !== W * H) throw new Error('Lochdaten passen nicht zur Landscape-Größe');
-  return raw;
+  for (const sub of HOLE_SUBS) if (raw.length === W * sub * H * sub) return { holes: raw, sub };
+  throw new Error('Lochdaten passen nicht zur Landscape-Größe');
+}
+
+/**
+ * Loch-Raster auf eine andere Unterteilung umrechnen (w/h = Zellen der Quelle).
+ * Feiner: jede Zelle wird vervielfacht. Gröber: Loch, wenn mindestens die Hälfte der Teilzellen Loch ist.
+ */
+export function resampleHoles(src: Uint8Array, w: number, h: number, from: number, to: number): Uint8Array {
+  if (from === to) return src.slice();
+  const nw = (w / from) * to;
+  const nh = (h / from) * to;
+  const out = new Uint8Array(nw * nh);
+  if (to > from) {
+    const f = to / from;
+    for (let y = 0; y < nh; y++) {
+      const srow = Math.floor(y / f) * w;
+      const drow = y * nw;
+      for (let x = 0; x < nw; x++) out[drow + x] = src[srow + Math.floor(x / f)];
+    }
+  } else {
+    const f = from / to;
+    const half = (f * f) / 2;
+    for (let y = 0; y < nh; y++) {
+      for (let x = 0; x < nw; x++) {
+        let n = 0;
+        for (let dy = 0; dy < f; dy++) {
+          const row = (y * f + dy) * w + x * f;
+          for (let dx = 0; dx < f; dx++) n += src[row + dx];
+        }
+        out[y * nw + x] = n >= half ? 1 : 0;
+      }
+    }
+  }
+  return out;
 }

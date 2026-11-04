@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BLOCK, type LandscapeData, type Rect } from './data.ts';
+import { BLOCK, type ChangeKind, type LandscapeData, type Rect } from './data.ts';
 
 // CDLOD-Rendering (Continuous Distance-Dependent Level of Detail, Strugar 2009):
 // Ein einziges 32×32-Gitter wird pro Quadtree-Knoten instanziert; der Vertex-Shader liest die Höhe aus einer
@@ -27,6 +27,8 @@ export interface LandscapeOverlay {
   ramp: { ax: number; az: number; bx: number; bz: number; width: number } | null;
   /** Komponenten-Raster anzeigen */
   grid: boolean;
+  /** Loch-Zellen unter dem Pinsel schraffiert zeigen (Füllen) */
+  holeGhost?: boolean;
 }
 
 let sharedGrid: THREE.BufferGeometry | null = null;
@@ -108,6 +110,7 @@ const COMMON_FRAG = /* glsl */ `
 uniform sampler2D uNormal;
 uniform sampler2D uHoles;
 uniform vec2 uGridSize;
+uniform float uHoleSub;
 uniform float uQuad;
 varying vec2 vGrid;
 
@@ -116,7 +119,8 @@ vec3 lsNormal() {
   return normalize(vec3(e.x, sqrt(max(0.0, 1.0 - dot(e, e))), e.y));
 }
 void lsClip() {
-  ivec2 q = ivec2(clamp(floor(vGrid), vec2(0.0), uGridSize - 1.0));
+  // Loch-Zellen: uHoleSub × uHoleSub je Quad
+  ivec2 q = ivec2(clamp(floor(vGrid * uHoleSub), vec2(0.0), uGridSize * uHoleSub - 1.0));
   if (texelFetch(uHoles, q, 0).r > 0.001) discard;
 }
 `;
@@ -142,6 +146,18 @@ uniform vec4 uRegion;
 uniform vec4 uRampAB;
 uniform float uRampW;
 uniform vec4 uOverlayOn; // brush, region, ramp, grid
+uniform float uHoleGhost;
+float lsGhost = 0.0;
+
+// wie lsClip, aber Loch-Zellen unter dem Pinsel bleiben sichtbar (Vorschau beim Füllen)
+void lsClipEd() {
+  ivec2 q = ivec2(clamp(floor(vGrid * uHoleSub), vec2(0.0), uGridSize * uHoleSub - 1.0));
+  if (texelFetch(uHoles, q, 0).r > 0.001) {
+    vec2 lp = (vGrid - uGridSize * 0.5) * uQuad;
+    if (uHoleGhost > 0.5 && uOverlayOn.x > 0.5 && length(lp - uBrush.xy) <= uBrush.z) lsGhost = 1.0;
+    else discard;
+  }
+}
 
 float lsLine(float d) {
   float w = fwidth(d) * 1.2;
@@ -194,6 +210,10 @@ const OVERLAY_APPLY = /* glsl */ `
       oa = max(oa, a);
     }
     gl_FragColor.rgb = mix(gl_FragColor.rgb, ov * 1.5, oa);
+    if (lsGhost > 0.5) {
+      float s = step(0.5, fract((gl_FragCoord.x + gl_FragCoord.y) / 10.0));
+      gl_FragColor.rgb = mix(gl_FragColor.rgb, uBrushColor, 0.45 + 0.3 * s);
+    }
   }
 `;
 
@@ -213,7 +233,7 @@ export class LandscapeRenderer {
   readonly mesh: THREE.Mesh<THREE.InstancedBufferGeometry, THREE.MeshStandardMaterial>;
   readonly heightTex: THREE.DataTexture;
   readonly normalTex: THREE.DataTexture;
-  readonly holesTex: THREE.DataTexture;
+  holesTex: THREE.DataTexture;
   private normals: Uint8Array;
   private nodeAttr: THREE.InstancedBufferAttribute;
   private capacity = 0;
@@ -241,10 +261,7 @@ export class LandscapeRenderer {
     this.normalTex.minFilter = this.normalTex.magFilter = THREE.LinearFilter;
     this.normalTex.unpackAlignment = 1;
     this.normalTex.needsUpdate = true;
-    this.holesTex = new THREE.DataTexture(d.holes, d.W, d.H, THREE.RedFormat, THREE.UnsignedByteType);
-    this.holesTex.minFilter = this.holesTex.magFilter = THREE.NearestFilter;
-    this.holesTex.unpackAlignment = 1;
-    this.holesTex.needsUpdate = true;
+    this.holesTex = makeHolesTex(d);
 
     // Quadtree über eine Zweierpotenz an Knoten
     const nodes = Math.max(d.W, d.H) / G;
@@ -255,6 +272,7 @@ export class LandscapeRenderer {
       uNormal: { value: this.normalTex },
       uHoles: { value: this.holesTex },
       uGridSize: { value: new THREE.Vector2(d.W, d.H) },
+      uHoleSub: { value: d.holeSub },
       uQuad: { value: d.quadSize },
       uCamLocal: { value: new THREE.Vector3() },
       uMorphStart: { value: new Array<number>(MAX_LEVELS).fill(1e9) },
@@ -267,6 +285,7 @@ export class LandscapeRenderer {
       uRegion: { value: new THREE.Vector4() },
       uRampAB: { value: new THREE.Vector4() },
       uRampW: { value: 1 },
+      uHoleGhost: { value: 0 },
       uOverlayOn: { value: new THREE.Vector4(0, 0, 0, 0) }, // Achtung: Vector4() hat w = 1
     };
     this.setLook(look);
@@ -296,7 +315,7 @@ export class LandscapeRenderer {
         .replace(
           '#include <color_fragment>',
           /* glsl */ `#include <color_fragment>
-  lsClip();
+  lsClipEd();
   vec3 lsN = lsNormal();
   {
     float ang = degrees(acos(clamp(lsN.y, 0.0, 1.0)));
@@ -354,6 +373,7 @@ export class LandscapeRenderer {
   setOverlay(o: LandscapeOverlay): void {
     const on = this.uniforms.uOverlayOn.value as THREE.Vector4;
     on.set(o.brush ? 1 : 0, o.region ? 1 : 0, o.ramp ? 1 : 0, o.grid ? 1 : 0);
+    this.uniforms.uHoleGhost.value = o.holeGhost && o.brush ? 1 : 0;
     if (o.brush) {
       (this.uniforms.uBrush.value as THREE.Vector4).set(o.brush.x, o.brush.z, o.brush.radius, o.brush.falloff);
       (this.uniforms.uBrushColor.value as THREE.Color).copy(o.brush.color);
@@ -489,10 +509,18 @@ export class LandscapeRenderer {
 
   // ---------- Datenänderungen → Texturen ----------
 
-  private onDataChange(r: Rect, kind: 'height' | 'holes'): void {
+  private onDataChange(r: Rect, kind: ChangeKind): void {
     const d = this.data;
     if (kind === 'holes') {
-      uploadRows(this.holesTex, d.W, r);
+      uploadRows(this.holesTex, d.HW, r);
+      return;
+    }
+    if (kind === 'holeRes') {
+      // andere Rastergröße: Textur neu anlegen
+      this.holesTex.dispose();
+      this.holesTex = makeHolesTex(d);
+      this.uniforms.uHoles.value = this.holesTex;
+      this.uniforms.uHoleSub.value = d.holeSub;
       return;
     }
     uploadRows(this.heightTex, d.VW, r);
@@ -518,6 +546,8 @@ export class LandscapeRenderer {
 
   // ---------- Raycast (Picking, Schüsse) ----------
 
+  /** Picking trifft auch Löcher (nur kurzzeitig vom Löcher-Werkzeug gesetzt) */
+  pickThroughHoles = false;
   private _inv = new THREE.Matrix4();
   private _o = new THREE.Vector3();
   private _d = new THREE.Vector3();
@@ -527,7 +557,7 @@ export class LandscapeRenderer {
     this._inv.copy(mesh.matrixWorld).invert();
     this._o.copy(raycaster.ray.origin).applyMatrix4(this._inv);
     this._d.copy(raycaster.ray.direction).transformDirection(this._inv);
-    const hit = this.data.raycast(this._o, this._d, raycaster.far);
+    const hit = this.data.raycast(this._o, this._d, raycaster.far, this.pickThroughHoles);
     if (!hit || hit.t < raycaster.near) return;
     const point = raycaster.ray.at(hit.t, new THREE.Vector3());
     hits.push({
@@ -549,6 +579,14 @@ export class LandscapeRenderer {
     this.normalTex.dispose();
     this.holesTex.dispose();
   }
+}
+
+function makeHolesTex(d: LandscapeData): THREE.DataTexture {
+  const t = new THREE.DataTexture(d.holes, d.HW, d.HH, THREE.RedFormat, THREE.UnsignedByteType);
+  t.minFilter = t.magFilter = THREE.NearestFilter;
+  t.unpackAlignment = 1;
+  t.needsUpdate = true;
+  return t;
 }
 
 /** Nur geänderte Zeilen hochladen (three: Bereiche in "Komponenten" zu je 4, egal welches Format) */

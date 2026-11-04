@@ -1,5 +1,5 @@
 import { runErosion, type ErosionKind, type ErosionParams } from './erosion.ts';
-import type { LandscapeData, Rect } from './data.ts';
+import { resampleHoles, type LandscapeData, type Rect } from './data.ts';
 
 // Sculpt-Operationen auf LandscapeData (reine Funktionen, ohne Editor/three).
 // Koordinaten: Gitter (1 = ein Quad). Rechtecke für Höhen in Gitterpunkten, für Löcher in Quads.
@@ -16,7 +16,7 @@ export interface Brush {
   /** Anteil des Radius, über den die Wirkung abfällt (0 = harte Kante, 1 = ab der Mitte) */
   falloff: number;
   shape: FalloffShape;
-  /** 0..1 */
+  /** 0..2 (über 1: kräftiger als Standard) */
   strength: number;
 }
 
@@ -192,19 +192,24 @@ export function sculptErosion(d: LandscapeData, b: Brush, r: Rect, dt: number, k
 
 // ---------- Löcher ----------
 
-/** betroffene Quads eines Pinsels */
-export function brushQuadRect(d: LandscapeData, b: Brush): Rect | null {
+/** betroffene Loch-Zellen eines Pinsels */
+export function brushHoleRect(d: LandscapeData, b: Brush): Rect | null {
+  const s = d.holeSub;
   const r = b.radius;
-  return d.clip({ x: Math.floor(b.x - r), y: Math.floor(b.z - r), w: Math.ceil(2 * r) + 2, h: Math.ceil(2 * r) + 2 }, d.W, d.H);
+  return d.clip({ x: Math.floor((b.x - r) * s), y: Math.floor((b.z - r) * s), w: Math.ceil(2 * r * s) + 2, h: Math.ceil(2 * r * s) + 2 }, d.HW, d.HH);
 }
 
+/** Loch-Zellen setzen/entfernen, deren Mitte im Pinsel liegt (Rechteck in Zellen) */
 export function paintHoles(d: LandscapeData, b: Brush, r: Rect, set: boolean): void {
-  const inv = 1 / Math.max(0.5, b.radius);
-  for (let qz = r.y; qz < r.y + r.h; qz++) {
-    for (let qx = r.x; qx < r.x + r.w; qx++) {
-      const dx = (qx + 0.5 - b.x) * inv;
-      const dz = (qz + 0.5 - b.z) * inv;
-      if (dx * dx + dz * dz <= 1) d.holes[qz * d.W + qx] = set ? 1 : 0;
+  const s = d.holeSub;
+  // kleinster Pinsel trifft immer mindestens die Zelle unter dem Cursor
+  const inv = 1 / Math.max(0.5 / s, b.radius);
+  const HW = d.HW;
+  for (let cz = r.y; cz < r.y + r.h; cz++) {
+    for (let cx = r.x; cx < r.x + r.w; cx++) {
+      const dx = ((cx + 0.5) / s - b.x) * inv;
+      const dz = ((cz + 0.5) / s - b.z) * inv;
+      if (dx * dx + dz * dz <= 1) d.holes[cz * HW + cx] = set ? 1 : 0;
     }
   }
 }
@@ -269,8 +274,10 @@ export interface RegionCopy {
   w: number;
   h: number;
   heights: Float32Array;
-  /** Löcher der Quads (w−1 × h−1) */
+  /** Loch-Zellen ((w−1)·sub × (h−1)·sub) */
   holes: Uint8Array;
+  /** Loch-Auflösung der Quelle */
+  sub: number;
   /** Höhe in der Mitte (für relatives Einfügen) */
   base: number;
 }
@@ -278,11 +285,15 @@ export interface RegionCopy {
 export function copyRegion(d: LandscapeData, r: Rect): RegionCopy {
   const heights = new Float32Array(r.w * r.h);
   for (let y = 0; y < r.h; y++) heights.set(d.heights.subarray((r.y + y) * d.VW + r.x, (r.y + y) * d.VW + r.x + r.w), y * r.w);
-  const qw = Math.max(0, r.w - 1);
-  const qh = Math.max(0, r.h - 1);
-  const holes = new Uint8Array(qw * qh);
-  for (let y = 0; y < qh; y++) for (let x = 0; x < qw; x++) holes[y * qw + x] = d.holes[(r.y + y) * d.W + r.x + x];
-  return { w: r.w, h: r.h, heights, holes, base: heights[(r.h >> 1) * r.w + (r.w >> 1)] };
+  const sub = d.holeSub;
+  const cw = Math.max(0, r.w - 1) * sub;
+  const ch = Math.max(0, r.h - 1) * sub;
+  const holes = new Uint8Array(cw * ch);
+  for (let y = 0; y < ch; y++) {
+    const src = (r.y * sub + y) * d.HW + r.x * sub;
+    holes.set(d.holes.subarray(src, src + cw), y * cw);
+  }
+  return { w: r.w, h: r.h, heights, holes, sub, base: heights[(r.h >> 1) * r.w + (r.w >> 1)] };
 }
 
 /** Kopie mit linker oberer Ecke bei (x0, y0) einsetzen; offset wird auf alle Höhen addiert */
@@ -297,13 +308,18 @@ export function pasteRegion(d: LandscapeData, c: RegionCopy, x0: number, y0: num
     }
   }
   if (!withHoles) return;
-  const qw = c.w - 1;
-  for (let y = 0; y < c.h - 1; y++) {
-    const qz = y0 + y;
-    if (qz < 0 || qz >= d.H) continue;
-    for (let x = 0; x < qw; x++) {
-      const qx = x0 + x;
-      if (qx >= 0 && qx < d.W) d.holes[qz * d.W + qx] = c.holes[y * qw + x];
+  // Kopie in die Loch-Auflösung des Ziels umrechnen
+  const s = d.holeSub;
+  const cw = (c.w - 1) * s;
+  const ch = (c.h - 1) * s;
+  const holes = c.sub === s ? c.holes : resampleHoles(c.holes, (c.w - 1) * c.sub, (c.h - 1) * c.sub, c.sub, s);
+  const HW = d.HW;
+  for (let y = 0; y < ch; y++) {
+    const cz = y0 * s + y;
+    if (cz < 0 || cz >= d.HH) continue;
+    for (let x = 0; x < cw; x++) {
+      const cx = x0 * s + x;
+      if (cx >= 0 && cx < HW) d.holes[cz * HW + cx] = holes[y * cw + x];
     }
   }
 }
@@ -316,8 +332,8 @@ export function mirrorCopy(c: RegionCopy, axis: 'x' | 'z'): RegionCopy {
       const sy = axis === 'z' ? c.h - 1 - y : y;
       heights[y * c.w + x] = c.heights[sy * c.w + sx];
     }
-  const qw = c.w - 1;
-  const qh = c.h - 1;
+  const qw = (c.w - 1) * c.sub;
+  const qh = (c.h - 1) * c.sub;
   const holes = new Uint8Array(c.holes.length);
   for (let y = 0; y < qh; y++)
     for (let x = 0; x < qw; x++) {
@@ -334,10 +350,10 @@ export function rotateCopy(c: RegionCopy): RegionCopy {
   const h = c.w;
   const heights = new Float32Array(c.heights.length);
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) heights[y * w + x] = c.heights[(c.h - 1 - x) * c.w + y];
-  const qw = w - 1;
-  const qh = h - 1;
-  const sqw = c.w - 1;
+  // Loch-Zellen: Quelle scw × sch → Ziel sch × scw
+  const scw = (c.w - 1) * c.sub;
+  const sch = (c.h - 1) * c.sub;
   const holes = new Uint8Array(c.holes.length);
-  for (let y = 0; y < qh; y++) for (let x = 0; x < qw; x++) holes[y * qw + x] = c.holes[(c.h - 2 - x) * sqw + y];
-  return { w, h, heights, holes, base: c.base };
+  for (let y = 0; y < scw; y++) for (let x = 0; x < sch; x++) holes[y * sch + x] = c.holes[(sch - 1 - x) * scw + y];
+  return { w, h, heights, holes, sub: c.sub, base: c.base };
 }

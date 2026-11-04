@@ -144,13 +144,19 @@ wie in UE5: Größe (Komponenten × Komponenten), Quad-Größe (0,25–4 m), Mat
 > **Umgesetzt (Phase 1, 04.11.2026):** Code in `world/landscape/` (Daten, CDLOD-Renderer, Pinsel, Erosion + Worker,
 > Heightmap-I/O, Kollision) und `editor/modes/landscape.ts` (Werkzeug-Panel, Umschalt+2).
 > - Höhen im Speicher Float32, gespeichert als uint16 mit Min/Max **pro Speichern** (statt fester −256 … +768 m),
->   Delta-kodiert und mit `fflate` komprimiert, als Blob. Löcher als 1 Byte je Quad.
+>   Delta-kodiert und mit `fflate` komprimiert, als Blob. Löcher als 1 Byte je Zelle; Zellen je Quad-Kante
+>   (`holeRes` = 1/2/4/8) einstellbar, begrenzt auf 2^26 Zellen und 16384 je Seite (8 × 8 Komponenten → 8×8,
+>   32 × 32 → 2×2, 64 × 64 → 1). Beim Laden wird die Auflösung aus der Blob-Länge erkannt; Umstellen rechnet
+>   vorhandene Löcher um (gröber: Mehrheit der Teilzellen) und ist ein eigener Undo-Schritt.
 > - CDLOD-Knoten = 32 × 32 Quads (passt zu den Min/Max-Blöcken), LOD-Abstand über die Grafik-Option *Terrain-Detail*
 >   (Niedrig/Mittel/Hoch/Ultra = 1,5/2/2,5/3,5 × Knotengröße). Normalen per Pixel aus eigener Textur.
 > - Pinsel in Bildwiederholrate, Erosion als Pinsel im Hauptthread (max. 15 Hz), auf Region/ganze Fläche im Worker
 >   mit Fortschritt und Abbrechen. *An Mesh anpassen* wirkt auf die ausgewählten Objekte (Strahl je Gitterpunkt, weicher Rand).
 > - Import: Dialog liest Min/Max aus dem PNG-Text-Chunk oder dem Dateinamen (`…_h<min>_<max>.png`); Export schreibt beides.
-> - Kollision: Rapier-Heightfield je Komponente, Komponenten mit Löchern als Trimesh.
+> - Kollision: Rapier-Heightfield je Komponente, Komponenten mit Löchern als Trimesh (teilweise gelochte Quads mit
+>   Teilzellen-Dreiecken auf der Quad-Ebene). Raycast/`heightAt` prüfen die Lochzelle.
+> - Feedback-Runde: Pinsel-Stärke bis 2, kleinste Pinselgröße 0,1 m, einstellbare Loch-Auflösung; Löcher-Werkzeug mit
+>   Modus Malen/Füllen, der Pinsel-Strahl trifft dabei auch Lochstellen (sonst nur vom Rand her füllbar).
 > - Die Map-Sichtweite (World Settings) skaliert jetzt Nebel und Kamera-`far` im Spiel (Basis 60 m = Faktor 1).
 > - Gemessen (RX 7800 XT, 1080p, 4096² aus PNG): Import 1,8 s, Editor ~790 FPS, Spiel ~450–510 FPS,
 >   Erosion der ganzen Fläche ~55 s im Worker (Editor bleibt flüssig). Benchmark-Map steht noch aus.

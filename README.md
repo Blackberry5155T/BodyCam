@@ -39,8 +39,11 @@ Schnee (füllen sich bei Schneefall langsam wieder) und Wellenringe in Pfützen.
 - **Landscape** (Modus Umschalt+2, wie UE5): *Neue Landscape…* (Komponenten à 128 Quads, Quad-Größe, optional aus Heightmap)
   oder *Aus Heightmap…* (16-bit PNG oder RAW `.r16`; Min/Max-Höhe im Dialog). Werkzeuge 1–8: Formen (Umschalt = senken),
   Glätten, Abflachen, Rampe (zwei Klicks, Enter), Noise, Erosion (hydraulisch/thermisch; als Pinsel oder im Hintergrund auf
-  Region/ganze Fläche), Löcher (Umschalt = füllen), Region (Rechteck ziehen → Kopieren/Einfügen, Spiegeln, Drehen 90°,
-  *An Mesh anpassen* für die ausgewählten Objekte). `[`/`]` oder Strg+Mausrad = Pinselgröße, Strg+Umschalt+Mausrad = Stärke.
+  Region/ganze Fläche), Löcher (Modus *Loch malen* / *Loch füllen*, Umschalt = umkehren; Lochstellen sind mit dem
+  Pinsel treffbar, beim Füllen zeigt eine Schraffur die Fläche; *Loch-Auflösung* 1 / 2×2 / 4×4 / 8×8 Zellen je Quad, je nach
+  Landscape-Größe begrenzt, rückgängig machbar), Region (Rechteck ziehen → Kopieren/Einfügen, Spiegeln, Drehen 90°,
+  *An Mesh anpassen* für die ausgewählten Objekte). `[`/`]` oder Strg+Mausrad = Pinselgröße (ab 0,1 m),
+  Strg+Umschalt+Mausrad = Stärke (0 … 2).
   Export als PNG 16-bit oder `.r16` (Min/Max stehen im Dateinamen). Im Spiel: begehbar und beschießbar (Rapier-Heightfield);
   LOD-Abstand über Grafik › *Terrain-Detail*. Beim Anlegen wird die *Sichtweite* (World Settings) passend erhöht.
 - **Speichern:** Maps liegen im Browser (IndexedDB, Map-Format v2; Maps aus der alten localStorage-Ablage werden beim

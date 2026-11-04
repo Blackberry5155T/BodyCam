@@ -1,15 +1,16 @@
 import * as THREE from 'three';
 import { h, numberField, dialog, pickFile, toast } from '../ui.ts';
 import { icon } from '../icons.ts';
+import { deflateSync, inflateSync } from 'fflate';
 import { GridRecorder } from '../history.ts';
 import type { EditorMode, ModeContext } from './types.ts';
 import type { MapNode } from '../../world/mapLoader.ts';
 import { newId, type MapObjectData } from '../../world/mapFormat.ts';
 import { LANDSCAPE_TYPE, landscapeEntry, landscapeProps, provideLandscapeData, type LandscapeEntry } from '../../world/landscape/asset.ts';
-import { COMPONENT_QUADS, LandscapeData, MAX_QUADS, type Rect } from '../../world/landscape/data.ts';
+import { COMPONENT_QUADS, HOLE_SUBS, LandscapeData, MAX_QUADS, type Rect } from '../../world/landscape/data.ts';
 import {
   applyRamp,
-  brushQuadRect,
+  brushHoleRect,
   brushRect,
   copyRegion,
   mirrorCopy,
@@ -43,9 +44,12 @@ const TOOLS: { id: ToolId; label: string; hint: string }[] = [
   { id: 'ramp', label: 'Rampe', hint: 'Klick = Anfang, Klick = Ende, Enter = anwenden' },
   { id: 'noise', label: 'Noise', hint: 'Rauschen auftragen, Umschalt = umgekehrt' },
   { id: 'erosion', label: 'Erosion', hint: 'Pinsel oder ganze Region/Landscape' },
-  { id: 'holes', label: 'Löcher', hint: 'Löcher malen (Höhlen-Eingänge), Umschalt = füllen' },
+  { id: 'holes', label: 'Löcher', hint: 'Löcher malen oder wieder füllen (Höhlen-Eingänge), Umschalt = umkehren' },
   { id: 'region', label: 'Region', hint: 'Rechteck aufziehen: Kopieren, Einfügen, Spiegeln, Drehen' },
 ];
+
+/** kleinster Pinsel (m) — klein genug für feine Löcher */
+const MIN_RADIUS = 0.1;
 
 const BRUSH_TOOLS = new Set<ToolId>(['sculpt', 'smooth', 'flatten', 'noise', 'erosion', 'holes']);
 
@@ -104,6 +108,8 @@ interface Prefs {
   fitMode: 'top' | 'bottom';
   fitMargin: number;
   grid: boolean;
+  /** Löcher-Werkzeug: füllen statt malen (Umschalt kehrt um) */
+  holeFill: boolean;
 }
 
 const DEFAULT_PREFS: Prefs = {
@@ -124,6 +130,7 @@ const DEFAULT_PREFS: Prefs = {
   fitMode: 'top',
   fitMargin: 4,
   grid: false,
+  holeFill: false,
 };
 
 function loadPrefs(): Prefs {
@@ -154,6 +161,8 @@ export function createLandscapeMode(ctx: ModeContext): EditorMode {
   let active = false;
   let shift = false;
   let hover: Hover | null = null;
+  /** Löcher-Werkzeug füllt gerade (Panel-Modus, Umschalt kehrt um) */
+  const filling = () => prefs.holeFill !== shift;
   let lastPointer: { x: number; y: number } | null = null;
 
   // Strich
@@ -197,7 +206,11 @@ export function createLandscapeMode(ctx: ModeContext): EditorMode {
     let best: Hover | null = null;
     let bestD = Infinity;
     for (const t of only ? [only] : targets()) {
-      const hit = raycaster.intersectObject(t.entry.renderer.mesh, false)[0];
+      const lr = t.entry.renderer;
+      // Löcher-Werkzeug: Lochstellen sind treffbar, sonst ließe sich ein Loch nur vom Rand her füllen
+      lr.pickThroughHoles = prefs.tool === 'holes';
+      const hit = raycaster.intersectObject(lr.mesh, false)[0];
+      lr.pickThroughHoles = false;
       if (!hit || hit.distance >= bestD) continue;
       bestD = hit.distance;
       best = { t, lx: hit.point.x - t.origin.x, ly: hit.point.y - t.origin.y, lz: hit.point.z - t.origin.z };
@@ -212,7 +225,7 @@ export function createLandscapeMode(ctx: ModeContext): EditorMode {
       case 'sculpt':
         return shift ? COLORS.lower : COLORS.raise;
       case 'holes':
-        return shift ? COLORS.raise : COLORS.holes;
+        return filling() ? COLORS.raise : COLORS.holes;
       default:
         return COLORS[prefs.tool] ?? COLORS.raise;
     }
@@ -240,7 +253,7 @@ export function createLandscapeMode(ctx: ModeContext): EditorMode {
         const b = rampB ?? (hover && mine(hover) ? hover : rampA);
         ramp = { ax: rampA.lx, az: rampA.lz, bx: b.lx, bz: b.lz, width: prefs.rampWidth };
       }
-      t.entry.renderer.setOverlay({ brush, region: reg, ramp, grid: active && prefs.grid });
+      t.entry.renderer.setOverlay({ brush, region: reg, ramp, grid: active && prefs.grid, holeGhost: prefs.tool === 'holes' && filling() });
     }
   }
 
@@ -253,7 +266,8 @@ export function createLandscapeMode(ctx: ModeContext): EditorMode {
   function recorders(d: LandscapeData) {
     return {
       heights: new GridRecorder(d.heights, d.VW, d.VH, 1, (r) => d.changed(r, 'height')),
-      holes: new GridRecorder(d.holes, d.W, d.H, 1, (r) => d.changed(r, 'holes')),
+      // Lochraster wird bei Auflösungswechsel ersetzt → immer das aktuelle nehmen
+      holes: new GridRecorder(() => d.holes, d.HW, d.HH, 1, (r) => d.changed(r, 'holes')),
     };
   }
 
@@ -262,10 +276,10 @@ export function createLandscapeMode(ctx: ModeContext): EditorMode {
     const d = stroke.t.entry.data;
     const b = makeBrush(d, hover);
     if (prefs.tool === 'holes') {
-      const r = brushQuadRect(d, b);
+      const r = brushHoleRect(d, b);
       if (!r) return;
       stroke.holes.touch(r);
-      paintHoles(d, b, r, !shift);
+      paintHoles(d, b, r, !filling());
       d.changed(r, 'holes');
       return;
     }
@@ -304,14 +318,17 @@ export function createLandscapeMode(ctx: ModeContext): EditorMode {
   function editHeights(t: Target, rects: Rect[], label: string, fn: () => void, holes = false): void {
     const d = t.entry.data;
     const rec = recorders(d);
+    // Gitterpunkte → Loch-Zellen der eingeschlossenen Quads
+    const s = d.holeSub;
+    const cells = (r: Rect): Rect => ({ x: r.x * s, y: r.y * s, w: Math.max(1, r.w - 1) * s, h: Math.max(1, r.h - 1) * s });
     for (const r of rects) {
       rec.heights.touch(r);
-      if (holes) rec.holes.touch({ x: r.x, y: r.y, w: Math.max(1, r.w - 1), h: Math.max(1, r.h - 1) });
+      if (holes) rec.holes.touch(cells(r));
     }
     fn();
     for (const r of rects) {
       d.changed(r, 'height');
-      if (holes) d.changed({ x: r.x, y: r.y, w: Math.max(1, r.w - 1), h: Math.max(1, r.h - 1) }, 'holes');
+      if (holes) d.changed(cells(r), 'holes');
     }
     state.commitData(rec.heights.finish(label));
     state.commitData(rec.holes.finish(label));
@@ -751,6 +768,41 @@ export function createLandscapeMode(ctx: ModeContext): EditorMode {
     return b;
   };
 
+  // ---------- Loch-Auflösung ----------
+
+  /** Loch-Auflösung ändern (eigener Undo-Schritt mit vollständigem Lochraster vorher/nachher) */
+  function setHoleRes(t: Target, sub: number): void {
+    const d = t.entry.data;
+    if (sub === d.holeSub || stroke) return;
+    const before = { sub: d.holeSub, holes: deflateSync(d.holes, { level: 1 }) };
+    d.setHoleSub(sub);
+    const after = { sub, holes: deflateSync(d.holes, { level: 1 }) };
+    const apply = (x: typeof before) => {
+      d.setHoleSub(x.sub, inflateSync(x.holes));
+      render();
+    };
+    const label = `Landscape: Loch-Auflösung ${sub}×${sub}`;
+    state.commitData({ label, bytes: before.holes.byteLength + after.holes.byteLength + 64, undo: () => apply(before), redo: () => apply(after) });
+    ctx.status(`Loch-Auflösung: ${subLabel(sub)} (${fmtCell(d.quadSize / sub)})`);
+    render();
+  }
+
+  function holeResSection(t: Target, d: LandscapeData): HTMLElement {
+    const max = d.maxHoleSub();
+    const opts = HOLE_SUBS.filter((s) => s <= max).map((s): [string, string] => [String(s), `${subLabel(s)} (${fmtCell(d.quadSize / s)})`]);
+    const mb = (d.W * d.H * d.holeSub * d.holeSub) / 1e6;
+    return section(
+      'Loch-Auflösung',
+      select<string>('Zelle', String(d.holeSub), opts, (v) => setHoleRes(t, Number(v))),
+      h(
+        'div',
+        { class: 'mode-note dim' },
+        `Feiner = genauere Lochränder (Höhlen, Bunker-Eingänge). Bestehende Löcher werden umgerechnet. Speicher: ${mb < 1 ? '< 1' : Math.round(mb)} MB` +
+          (max < 8 ? ` · feiner als ${max}×${max} geht bei dieser Landscape-Größe nicht` : ''),
+      ),
+    );
+  }
+
   function render(): void {
     const all = targets();
     const t = selectedTarget();
@@ -788,8 +840,8 @@ export function createLandscapeMode(ctx: ModeContext): EditorMode {
       children.push(
         section(
           'Pinsel',
-          num('Größe (m)', () => prefs.radius, (v) => (prefs.radius = v), 0.5, 0.5, 500),
-          prefs.tool !== 'holes' ? num('Stärke', () => prefs.strength, (v) => (prefs.strength = v), 0.01, 0.01, 1) : null,
+          num('Größe (m)', () => prefs.radius, (v) => (prefs.radius = v), 0.5, MIN_RADIUS, 500),
+          prefs.tool !== 'holes' ? num('Stärke', () => prefs.strength, (v) => (prefs.strength = v), 0.01, 0.01, 2) : null,
           prefs.tool !== 'holes' ? num('Abfall', () => prefs.falloff, (v) => (prefs.falloff = v), 0.05, 0, 1) : null,
           prefs.tool !== 'holes'
             ? select<FalloffShape>('Abfall-Form', prefs.shape, [['smooth', 'Weich'], ['linear', 'Linear'], ['spherical', 'Kugel'], ['tip', 'Spitz']], (v) => (prefs.shape = v))
@@ -798,6 +850,19 @@ export function createLandscapeMode(ctx: ModeContext): EditorMode {
         ),
       );
     }
+    if (prefs.tool === 'holes') {
+      children.push(
+        section(
+          'Löcher',
+          select<'paint' | 'fill'>('Modus', prefs.holeFill ? 'fill' : 'paint', [['paint', 'Loch malen'], ['fill', 'Loch füllen']], (v) => {
+            prefs.holeFill = v === 'fill';
+            updateOverlay();
+          }),
+          h('div', { class: 'mode-note dim' }, 'Umschalt halten = jeweils das andere. Beim Füllen zeigt die Schraffur, was zugemacht wird.'),
+        ),
+      );
+    }
+    if (prefs.tool === 'holes' && t && d) children.push(holeResSection(t, d));
 
     if (prefs.tool === 'flatten') {
       children.push(section('Abflachen', select<FlattenMode>('Richtung', prefs.flattenMode, [['both', 'Anheben und Senken'], ['raise', 'Nur anheben'], ['lower', 'Nur senken']], (v) => (prefs.flattenMode = v))));
@@ -1027,10 +1092,10 @@ export function createLandscapeMode(ctx: ModeContext): EditorMode {
     wheel(e) {
       if (!e.ctrlKey) return false;
       const k = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-      if (e.shiftKey) prefs.strength = THREE.MathUtils.clamp(prefs.strength * k, 0.01, 1);
-      else prefs.radius = THREE.MathUtils.clamp(prefs.radius * k, 0.5, 500);
+      if (e.shiftKey) prefs.strength = THREE.MathUtils.clamp(prefs.strength * k, 0.01, 2);
+      else prefs.radius = THREE.MathUtils.clamp(prefs.radius * k, MIN_RADIUS, 500);
       savePrefs();
-      ctx.status(e.shiftKey ? `Pinselstärke ${prefs.strength.toFixed(2)}` : `Pinselgröße ${prefs.radius.toFixed(1)} m`);
+      ctx.status(e.shiftKey ? `Pinselstärke ${prefs.strength.toFixed(2)}` : `Pinselgröße ${fmtRadius(prefs.radius)}`);
       render();
       updateOverlay();
       return true;
@@ -1052,9 +1117,9 @@ export function createLandscapeMode(ctx: ModeContext): EditorMode {
     key(e) {
       if (e.ctrlKey || e.altKey || e.metaKey) return false;
       if (e.key === '[' || e.key === ']') {
-        prefs.radius = THREE.MathUtils.clamp(prefs.radius * (e.key === ']' ? 1.15 : 1 / 1.15), 0.5, 500);
+        prefs.radius = THREE.MathUtils.clamp(prefs.radius * (e.key === ']' ? 1.15 : 1 / 1.15), MIN_RADIUS, 500);
         savePrefs();
-        ctx.status(`Pinselgröße ${prefs.radius.toFixed(1)} m`);
+        ctx.status(`Pinselgröße ${fmtRadius(prefs.radius)}`);
         render();
         updateOverlay();
         return true;
@@ -1087,6 +1152,18 @@ function clampInt(v: number, lo: number, hi: number): number {
 
 function round2(v: number): number {
   return Math.round(v * 100) / 100;
+}
+
+function fmtCell(m: number): string {
+  return m >= 1 ? `${Math.round(m * 100) / 100} m` : `${Math.round(m * 1000) / 10} cm`;
+}
+
+function subLabel(s: number): string {
+  return s === 1 ? '1 je Quad' : `${s}×${s} je Quad`;
+}
+
+function fmtRadius(m: number): string {
+  return `${m < 1 ? m.toFixed(2) : m.toFixed(1)} m`;
 }
 
 function fmtLen(m: number): string {

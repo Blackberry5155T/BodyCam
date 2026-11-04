@@ -3,7 +3,8 @@ import type { Collider } from '../collision.ts';
 import { COMPONENT_QUADS, type LandscapeData } from './data.ts';
 
 // Kollision einer Landscape: ein Rapier-Heightfield je Komponente (128 × 128 Quads),
-// Komponenten mit Löchern werden zu Dreiecksnetzen (Heightfields kennen keine Löcher).
+// Komponenten mit Löchern werden zu Dreiecksnetzen (Heightfields kennen keine Löcher). Bei feiner
+// Loch-Auflösung bekommen teilweise gelochte Quads ein Teilnetz je Loch-Zelle (Höhe aus der Ebene des Quad-Dreiecks).
 // Unveränderte Komponenten behalten ihr Collider-Objekt (PhysicsWorld.sync vergleicht nach Identität).
 
 interface CompEntry {
@@ -21,6 +22,19 @@ export class LandscapeColliders {
     this.comps = new Array(data.compX * data.compZ).fill(null);
     this.revs = new Uint32Array(data.compX * data.compZ);
     this.off = data.onChange((r, kind) => {
+      if (kind === 'holeRes') {
+        for (let i = 0; i < this.revs.length; i++) this.revs[i]++;
+        return;
+      }
+      // Loch-Zellen → Quads
+      if (kind === 'holes' && data.holeSub > 1) {
+        const s = data.holeSub;
+        const x1 = Math.ceil((r.x + r.w) / s);
+        const y1 = Math.ceil((r.y + r.h) / s);
+        r = { x: Math.floor(r.x / s), y: Math.floor(r.y / s), w: 0, h: 0 };
+        r.w = x1 - r.x;
+        r.h = y1 - r.y;
+      }
       // Höhen: Gitterpunkte am Rand gehören zu zwei Komponenten
       const pad = kind === 'height' ? 1 : 0;
       const cx0 = Math.max(0, Math.floor((r.x - pad) / COMPONENT_QUADS));
@@ -41,7 +55,7 @@ export class LandscapeColliders {
         const i = cz * d.compX + cx;
         let e = this.comps[i];
         if (!e || e.rev !== this.revs[i] || e.key !== key) {
-          const collider = d.compHoles[i] >= COMPONENT_QUADS * COMPONENT_QUADS ? null : this.buildComponent(cx, cz, origin);
+          const collider = d.compHoles[i] >= (COMPONENT_QUADS * d.holeSub) ** 2 ? null : this.buildComponent(cx, cz, origin);
           e = collider ? { rev: this.revs[i], key, collider } : null;
           this.comps[i] = e;
         }
@@ -83,28 +97,59 @@ export class LandscapeColliders {
         maxY: origin.y + mx,
       };
     }
-    // Mit Löchern: Netz nur aus den vorhandenen Quads
-    const vertices = new Float32Array((N + 1) * (N + 1) * 3);
-    let k = 0;
+    // Mit Löchern: Netz nur aus den vorhandenen Quads bzw. Loch-Zellen
+    const verts: number[] = [];
     for (let z = 0; z <= N; z++) {
       for (let x = 0; x <= N; x++) {
-        vertices[k++] = origin.x + d.fromGridX(x0 + x);
-        vertices[k++] = origin.y + d.heights[(z0 + z) * d.VW + x0 + x];
-        vertices[k++] = origin.z + d.fromGridZ(z0 + z);
+        verts.push(origin.x + d.fromGridX(x0 + x), origin.y + d.heights[(z0 + z) * d.VW + x0 + x], origin.z + d.fromGridZ(z0 + z));
       }
     }
     const idx: number[] = [];
+    const s = d.holeSub;
+    const HW = d.HW;
     for (let z = 0; z < N; z++) {
       for (let x = 0; x < N; x++) {
-        if (d.holes[(z0 + z) * d.W + x0 + x]) continue;
-        const a = z * (N + 1) + x;
-        const b = a + 1;
-        const c = a + N + 1;
-        const e = c + 1;
-        idx.push(a, c, e, a, e, b);
+        const state = s === 1 ? (d.holes[(z0 + z) * d.W + x0 + x] ? 2 : 0) : d.quadHoleState(x0 + x, z0 + z);
+        if (state === 2) continue;
+        if (state === 0) {
+          const a = z * (N + 1) + x;
+          const b = a + 1;
+          const c = a + N + 1;
+          const e = c + 1;
+          idx.push(a, c, e, a, e, b);
+          continue;
+        }
+        // teilweise gelocht: (s+1)² eigene Punkte, Dreiecke nur für offene Zellen
+        const gx = x0 + x;
+        const gz = z0 + z;
+        const h00 = d.heights[gz * d.VW + gx];
+        const h10 = d.heights[gz * d.VW + gx + 1];
+        const h01 = d.heights[(gz + 1) * d.VW + gx];
+        const h11 = d.heights[(gz + 1) * d.VW + gx + 1];
+        const base = verts.length / 3;
+        for (let sz = 0; sz <= s; sz++) {
+          const fz = sz / s;
+          for (let sx = 0; sx <= s; sx++) {
+            const fx = sx / s;
+            // gleiche Diagonale wie das Quad: (0,0)–(1,1)
+            const hh = fz >= fx ? h00 + (h11 - h01) * fx + (h01 - h00) * fz : h00 + (h10 - h00) * fx + (h11 - h10) * fz;
+            verts.push(origin.x + d.fromGridX(gx + fx), origin.y + hh, origin.z + d.fromGridZ(gz + fz));
+          }
+        }
+        for (let sz = 0; sz < s; sz++) {
+          const row = (gz * s + sz) * HW + gx * s;
+          for (let sx = 0; sx < s; sx++) {
+            if (d.holes[row + sx]) continue;
+            const a = base + sz * (s + 1) + sx;
+            const b = a + 1;
+            const c = a + s + 1;
+            const e = c + 1;
+            idx.push(a, c, e, a, e, b);
+          }
+        }
       }
     }
-    return { type: 'trimesh', vertices, indices: new Uint32Array(idx), minY: origin.y + mn, maxY: origin.y + mx };
+    return { type: 'trimesh', vertices: new Float32Array(verts), indices: new Uint32Array(idx), minY: origin.y + mn, maxY: origin.y + mx };
   }
 
   dispose(): void {
