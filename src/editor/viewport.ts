@@ -8,12 +8,12 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import type { EditorState } from './state.ts';
 import type { AssetContext } from '../world/assets.ts';
 import { Weather, isWeatherType } from '../world/weather.ts';
-import { MapNode, WorldRig, applyTransform, buildInstance, createNode, nodeOf, readTransform } from '../world/mapLoader.ts';
+import { MapNode, WorldRig, applyTransform, buildInstance, computeColliders, createNode, nodeOf, readTransform } from '../world/mapLoader.ts';
 import { ScriptRuntime } from '../scripting/runtime.ts';
 import { ScreenRuntime } from '../scripting/screenRuntime.ts';
 import { SCREEN_PX, defaultScreen } from '../world/screen.ts';
 import type { ScreenSurface } from '../world/assets.ts';
-import { SCALE } from '../world/collision.ts';
+import { SCALE, type Collider } from '../world/collision.ts';
 import { findSun, sunWorld, writeSunToObject } from '../world/sun.ts';
 import { findWeather, weatherWorld } from '../world/weatherObject.ts';
 import { h } from './ui.ts';
@@ -69,6 +69,7 @@ export class Viewport {
   showFog = true;
   bloomEnabled = true;
   speedIndex = 3;
+  showFps = false;
 
   onStatus?: (msg: string, error?: boolean) => void;
   onContextMenu?: (node: MapNode | null, x: number, y: number) => void;
@@ -102,6 +103,9 @@ export class Viewport {
   private gizmoMoved = false;
   private dragStart: { pivot: THREE.Matrix4; nodes: { node: MapNode; matrix: THREE.Matrix4 }[] } | null = null;
   private runtime: ScriptRuntime | null = null;
+  /** Collider für die Partikel-Physik (Rauch an Decken, Funken an Wänden); im Editor ohne Physik-Welt gesammelt */
+  private fxCollidersDirty = true;
+  private fxColliderTimer = 0;
   /** Programmierbare Bildschirme während der Simulation */
   private screens: { node: MapNode; rt: ScreenRuntime; surf: ScreenSurface }[] = [];
   private screenHover: ScreenRuntime | null = null;
@@ -115,6 +119,10 @@ export class Viewport {
   private message: HTMLElement;
   private messageTimer = 0;
   private info: HTMLElement;
+  private fpsEl: HTMLElement;
+  private fpsFrames = 0;
+  private fpsTime = 0;
+  private fpsWorst = 0;
 
   constructor(
     container: HTMLElement,
@@ -184,19 +192,27 @@ export class Viewport {
     this.simInfo = h('div', { class: 'vp-sim hidden' }, h('span', {}, 'SIMULATION — Klick: Benutzen · Shift+Klick: Treffer · Esc: Stopp'));
     this.message = h('div', { class: 'vp-message hidden' });
     this.info = h('div', { class: 'vp-info' });
-    container.append(this.simInfo, this.message, this.info);
+    this.fpsEl = h('div', { class: 'vp-fps hidden' });
+    container.append(this.simInfo, this.message, this.info, this.fpsEl);
 
     this.bindInput(canvas);
     new ResizeObserver(() => this.resize()).observe(container);
     this.resize();
 
-    state.on('scene', () => this.sync());
+    state.on('scene', () => {
+      this.sync();
+      this.fxCollidersDirty = true;
+    });
     state.on('selection', () => {
       this.updateGizmo();
       this.updateSelectionVisuals();
     });
-    state.on('world', () => this.applyWorld());
+    state.on('world', () => {
+      this.applyWorld();
+      this.fxCollidersDirty = true;
+    });
     state.on('transform', () => {
+      this.fxCollidersDirty = true;
       this.updateSelectionVisuals();
       // Sonnen-Objekt gedreht → Sonnenstand live nachziehen
       const sun = findSun(this.state.map.objects);
@@ -260,9 +276,31 @@ export class Viewport {
     node.instance?.helper?.traverse((c) => c.layers.set(HELPER_LAYER));
     if (this.viewMode === 'wire') this.setWire(node.root, true);
     node.instance?.ready?.then(() => {
+      this.fxCollidersDirty = true;
       if (this.viewMode === 'wire') this.setWire(node.root, true);
       this.updateSelectionVisuals();
     });
+  }
+
+  /** Noch laufende asynchrone Ladevorgänge (Landscape-Höhen, Modelle) */
+  pendingLoads(): Promise<void>[] {
+    return [...this.entries.values()].map((e) => e.node.instance?.ready).filter((p): p is Promise<void> => !!p);
+  }
+
+  /** Shader aller Materialien vorab kompilieren, damit der erste Frame nicht hängt */
+  async compileShaders(): Promise<void> {
+    try {
+      await this.renderer.compileAsync(this.scene, this.camera);
+    } catch (e) {
+      console.warn('Shader-Vorkompilierung fehlgeschlagen', e);
+    }
+  }
+
+  setShowFps(v: boolean): void {
+    this.showFps = v;
+    this.fpsEl.classList.toggle('hidden', !v);
+    this.fpsFrames = this.fpsTime = this.fpsWorst = 0;
+    this.fpsEl.textContent = '– FPS';
   }
 
   nodeById(id: string): MapNode | undefined {
@@ -846,6 +884,7 @@ export class Viewport {
   startSimulation(): void {
     if (this.runtime) return;
     this.state.simulating = true;
+    this.fxCollidersDirty = true;
     this.gizmo.detach();
     const nodes = [...this.entries.values()].map((e) => e.node);
     const camFeet = () => this.camera.position.clone().setY(this.camera.position.y - (SCALE.playerHeight - 0.3));
@@ -911,6 +950,7 @@ export class Viewport {
     this.weather.setWeather(isWeatherType(w.weather) ? w.weather : 'klar', w.weatherIntensity);
     this.weather.clearTracks();
     this.state.simulating = false;
+    this.fxCollidersDirty = true;
     // Alles auf den gespeicherten Zustand zurücksetzen
     for (const e of this.entries.values()) {
       e.node.collisionEnabled = true;
@@ -930,9 +970,43 @@ export class Viewport {
 
   // ---------- Frame ----------
 
+  /** FPS zweimal pro Sekunde aktualisieren; dazu Ø- und längste Frame-Zeit */
+  private countFps(dt: number): void {
+    this.fpsFrames++;
+    this.fpsTime += dt;
+    this.fpsWorst = Math.max(this.fpsWorst, dt);
+    if (this.fpsTime < 0.5) return;
+    const fps = this.fpsFrames / this.fpsTime;
+    const avg = (this.fpsTime / this.fpsFrames) * 1000;
+    this.fpsEl.textContent = `${Math.round(fps)} FPS  ·  ${avg.toFixed(1)} ms  ·  max ${(this.fpsWorst * 1000).toFixed(1)} ms`;
+    this.fpsEl.classList.toggle('low', fps < 30);
+    this.fpsEl.classList.toggle('mid', fps >= 30 && fps < 55);
+    this.fpsFrames = this.fpsTime = this.fpsWorst = 0;
+  }
+
+  /** Collider-Liste für Partikel nachziehen: nach Änderungen (gedrosselt) bzw. während der Simulation
+   *  regelmäßig (Scripts bewegen Objekte und tauschen dabei node.colliders aus) */
+  private updateFxColliders(dt: number): void {
+    this.fxColliderTimer += dt;
+    if (this.fxColliderTimer < 0.25) return;
+    if (!this.runtime && !this.fxCollidersDirty) return;
+    this.fxColliderTimer = 0;
+    // computeColliders nimmt die aktuelle Lage – auch während der Simulation korrekt
+    const recompute = this.fxCollidersDirty;
+    this.fxCollidersDirty = false;
+    const list: Collider[] = [];
+    for (const e of this.entries.values()) {
+      if (recompute) e.node.colliders = computeColliders(e.node);
+      if (e.node.root.visible) list.push(...e.node.colliders);
+    }
+    volumeFX.setColliders(list, this.state.map.world.groundPlane);
+  }
+
   private frameLoop(): void {
     this.timer.update();
-    const dt = Math.min(this.timer.getDelta(), 0.05);
+    const rawDt = this.timer.getDelta();
+    const dt = Math.min(rawDt, 0.05);
+    if (this.showFps) this.countFps(rawDt);
     const t = this.timer.getElapsed();
     if (!this.runtime) this.modeInput?.update?.(dt);
 
@@ -959,6 +1033,7 @@ export class Viewport {
     volumeFX.rain = this.weather.rainAmount;
     volumeFX.setPlayer(this.runtime ? _feet.set(cam.x, cam.y - SCALE.playerHeight, cam.z) : null, SCALE.playerHeight);
     volumeFX.setAmbient(this.world.hemi, this.world.sun);
+    this.updateFxColliders(dt);
     volumeFX.update(dt, t, this.camera);
     for (const e of this.entries.values()) e.node.instance?.update?.(dt, t, this.simulating);
     if (this.runtime) {

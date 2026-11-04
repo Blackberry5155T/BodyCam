@@ -29,6 +29,8 @@ import { PhysicsWorld, initPhysics } from './physics/physics.ts';
 import { LandscapeRenderer, updateLandscapes } from './world/landscape/render.ts';
 import { landscapeOf } from './world/landscape/asset.ts';
 import { SCALE } from './world/collision.ts';
+import { LoadingScreen } from './ui/loadingScreen.ts';
+import { ThirdPersonCam } from './dev/thirdPerson.ts';
 
 const FOG_MIN = 5;
 const FOG_MAX = 60;
@@ -53,7 +55,11 @@ const recEl = document.getElementById('rec')!;
 const unitEl = document.getElementById('unit')!;
 const recTime = document.getElementById('rec-time')!;
 
+const loading = new LoadingScreen('game');
+await loading.step(0.05, 'Map wird geladen …');
+
 const showError = (msg: string) => {
+  if (loading.visible) loading.fail(msg);
   blocker.classList.remove('hidden');
   blocker.textContent = msg;
 };
@@ -88,6 +94,7 @@ if (mapParam.startsWith('local:')) {
   else console.warn(`Map "${mapParam}" nicht gefunden — lade Startmap`);
 }
 const world = mapData.world;
+await loading.step(0.2, `Welt „${mapData.name}“ wird aufgebaut …`);
 
 const settings = new Settings();
 settings.viewScale = Math.max(1, (world.viewDistance ?? BASE_VIEW) / BASE_VIEW);
@@ -123,7 +130,12 @@ scene.add(level.group);
 // Fog-Plane: bodennahe Nebelschicht, grobe Simulation für Sichtlinien-Tests
 const fogPlane = level.world.groundFog;
 // Landscape-Höhen werden asynchron geladen (Blob) — vor Spawn und Physik abwarten
-await Promise.all(level.nodes.map((n) => n.instance?.ready).filter(Boolean));
+await loading.track(
+  level.nodes.map((n) => n.instance?.ready).filter((p): p is Promise<void> => !!p),
+  0.3,
+  0.6,
+  'Landscapes & Modelle',
+);
 // Spawn unter einem Hügel (Landscape nachträglich geformt) → auf die Oberfläche heben
 for (const n of level.nodes) {
   const ls = landscapeOf(n.instance);
@@ -135,13 +147,15 @@ for (const n of level.nodes) {
 }
 
 // Physik (Rapier/WASM): Kollision des Spielers, Abfragen für Deckung/Kopffreiheit
+await loading.step(0.62, 'Physik wird gestartet …');
 await initPhysics();
 const physics = new PhysicsWorld(world.groundPlane);
 physics.sync(level.colliders);
 physics.step(1 / 60);
+await loading.step(0.7, 'Spieler, Wetter & Scripts …');
 const player = new PlayerController(camera, document.body, physics, level.spawn, input, settings, level.spawnYaw);
 // Spielerkörper aus Würfeln; hält die Taschenlampe in der linken Hand
-const body = new PlayerBody(scene);
+const body = new PlayerBody(scene, physics);
 const shooter = new Shooter(scene, [level.group]);
 // Wetter: Niederschlag, nasser Boden, Pfützen mit Spiegelungen
 body.root.userData.noWeather = true;
@@ -159,6 +173,10 @@ weather.setLamp(body.flashlight);
 // Volumetrik: Taschenlampe beleuchtet Nebel/Rauch (inkl. Schatten im Lichtkegel)
 volumeFX.setLamp(body.flashlight);
 volumeFX.setQuality(settings.data.volumetrics);
+// Partikel (Rauch, Flammen, Funken) kollidieren mit denselben Collidern wie der Spieler
+volumeFX.setColliders(level.colliders, world.groundPlane);
+// Developer: Third-Person-Ansicht (nur im Vite-Dev-Server, Taste V, Alt+Mausrad = Abstand)
+const thirdPerson = import.meta.env.DEV ? new ThirdPersonCam(physics) : null;
 let shots = 0;
 let lastShot = '–';
 
@@ -287,6 +305,10 @@ for (const gs of gameScreens) gs.rt.start();
 let interactNode: MapNode | null = null;
 window.addEventListener('keydown', (e) => {
   if (e.repeat || !player.isLocked) return;
+  if (thirdPerson && e.code === 'KeyV' && !uiActive()) {
+    body.setThirdPerson(thirdPerson.toggle());
+    return;
+  }
   if (activeScreen) activeScreen.rt.keyPressed(e.code);
   else if (!terminalActive()) {
     scripts.keyPressed(e.code);
@@ -455,8 +477,12 @@ window.addEventListener(
   'wheel',
   (e) => {
     // Strg+Mausrad (z. B. beim Schleichen) würde sonst die Seite zoomen
-    if (e.ctrlKey) e.preventDefault();
+    if (e.ctrlKey || e.altKey) e.preventDefault();
     if (uiActive()) return;
+    if (e.altKey && thirdPerson?.enabled) {
+      thirdPerson.zoom(e.deltaY);
+      return;
+    }
     settings.set('viewDistance', THREE.MathUtils.clamp(settings.data.viewDistance + Math.sign(e.deltaY) * 2, FOG_MIN, FOG_MAX));
   },
   { passive: false },
@@ -519,6 +545,16 @@ window.addEventListener('resize', () => {
     if (f) player.setFocus(f);
   }
 });
+
+// --- Shader vorab kompilieren (sonst ruckeln die ersten Frames) ---
+await loading.step(0.8, 'Shader werden kompiliert …');
+try {
+  await renderer.compileAsync(scene, camera);
+} catch (e) {
+  console.warn('Shader-Vorkompilierung fehlgeschlagen', e);
+}
+await loading.step(0.95, 'Erster Frame …');
+let firstFrame = true;
 
 // --- Loop ---
 const timer = new THREE.Timer();
@@ -618,9 +654,17 @@ renderer.setAnimationLoop(() => {
   u.uGlitch.value = glitch;
   u.uRainLens.value = weather.lensRain;
 
+  // Dev-Third-Person: nur fürs Rendern hinter den Spieler, danach Bodycam-Pose zurück
+  const tp = thirdPerson?.enabled && !uiActive();
+  if (tp) thirdPerson!.apply(camera, player.position);
   updateLandscapes(camera);
   weather.render(camera, dt);
   composer.render(dt);
+  if (tp) thirdPerson!.restore(camera);
+  if (firstFrame) {
+    firstFrame = false;
+    void loading.finish();
+  }
 
   fpsAccum += dt;
   fpsFrames++;
@@ -635,7 +679,7 @@ renderer.setAnimationLoop(() => {
   }
   const p = player.position;
   stats.innerHTML =
-    `FPS ${fps} · ${mapData.name}<br>` +
+    `FPS ${fps} · ${mapData.name}${thirdPerson?.enabled ? ' · [DEV] Third Person' : ''}<br>` +
     `Pos ${p.x.toFixed(1)} / ${p.y.toFixed(1)} / ${p.z.toFixed(1)}<br>` +
     `Sichtweite ${d.fogEnabled ? Math.round(fogFar(d.viewDistance)) + ' m' : 'aus'}<br>` +
     `Wetter ${WEATHER_LABEL[weatherNow()]} · Nässe ${Math.round(weather.wetness * 100)}% · Pfützen ${Math.round(weather.puddleFill * 100)}%` +

@@ -414,6 +414,8 @@ export class PlayerController {
       time: this.time,
       aim: this.aimBlend,
       lean: this.lean,
+      crouching: this.crouching,
+      cover: this.coverState,
     };
   }
 

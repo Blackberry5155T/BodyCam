@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { Collider } from './collision.ts';
+import { setupLightShadow } from './lightShadow.ts';
 
 // Werkzeuge zum Bauen von Maps aus Primitiven: Boxen/Zylinder mit Collidern,
 // Lampen mit optionalem Flackern, Welt-skalierte UVs. Jede Map in src/maps/ nutzt den MapBuilder.
@@ -125,13 +126,7 @@ export class MapBuilder {
 
     const light = new THREE.PointLight(opts.color, opts.intensity, opts.distance, 2);
     light.position.copy(pos).add(new THREE.Vector3(0, -0.12, 0));
-    if (opts.shadow) {
-      light.castShadow = true;
-      light.shadow.mapSize.set(512, 512);
-      light.shadow.bias = -0.003;
-      light.shadow.radius = 3;
-      light.shadow.camera.near = 0.1;
-    }
+    if (opts.shadow) setupLightShadow(light);
     this.group.add(light);
 
     this.lamps.push({

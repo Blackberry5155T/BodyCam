@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>BodyCam Map-Editor</title>
+    <link rel="stylesheet" href="/loading.css" />
   </head>
   <body>
     <div id="menubar"></div>
@@ -22,6 +23,13 @@
       </div>
     </div>
     <div id="statusbar"></div>
+    <div id="loading" class="loading-screen ls-editor">
+      <div class="ls-box">
+        <div class="ls-title">BODYCAM<small>Map-Editor</small></div>
+        <div class="ls-bar"><i></i></div>
+        <div class="ls-row"><span class="ls-label">Lade …</span><span class="ls-pct"></span></div>
+      </div>
+    </div>
     <script type="module" src="/src/editor/main.ts"></script>
   </body>
 </html>

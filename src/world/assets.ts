@@ -4,6 +4,7 @@ import { MATERIAL_OPTIONS, getMaterial } from './materials.ts';
 import { createDust, createFogVolume, createLightCone, volumeFX } from './volumetrics.ts';
 import { createFire, createSmoke, createSparks, type EffectControl, type Effect } from './particles.ts';
 import { loadModel } from './modelStore.ts';
+import { setupLightShadow } from './lightShadow.ts';
 import { SCALE, type Collider } from './collision.ts';
 import { LANDSCAPE_ASSET, LANDSCAPE_TYPE } from './landscape/asset.ts';
 import { WEATHER_OPTIONS } from './weather.ts';
@@ -339,13 +340,7 @@ class LightState {
   }
 }
 
-function shadowSetup(light: THREE.PointLight | THREE.SpotLight, size = 512): void {
-  light.castShadow = true;
-  light.shadow.mapSize.set(size, size);
-  light.shadow.bias = -0.003;
-  light.shadow.radius = 3;
-  light.shadow.camera.near = 0.1;
-}
+const shadowSetup = setupLightShadow;
 
 const LAMP_EMISSIVE = 6;
 const fixtureMat = new THREE.MeshStandardMaterial({ color: 0x2a2c2e, roughness: 0.5, metalness: 0.6 });
@@ -528,6 +523,8 @@ export const ASSETS: Record<string, AssetDef> = {
       const strength = p(o, 'volumeStrength', 0.5);
       if (p(o, 'volumetric', true)) {
         cone = createLightCone({ color, length: distance, angle, penumbra: p(o, 'penumbra', 0.4), strength });
+        // Schattenkarte des Spotlichts verdeckt den Kegel (ohne Schatten: Wände/Objekte aus den Collidern)
+        cone.setLight(light);
         group.add(cone.mesh);
       }
       const unregister = volumeFX.addLight(light);
@@ -661,6 +658,7 @@ export const ASSETS: Record<string, AssetDef> = {
         helper,
         update: (_dt, t) => fog.update(t),
         dispose: () => {
+          fog.dispose();
           fog.mesh.geometry.dispose();
           (fog.mesh.material as THREE.Material).dispose();
         },
@@ -693,6 +691,7 @@ export const ASSETS: Record<string, AssetDef> = {
         helper,
         update: (dt, t) => dust.update(dt, t),
         dispose: () => {
+          dust.dispose();
           dust.points.geometry.dispose();
           (dust.points.material as THREE.Material).dispose();
         },

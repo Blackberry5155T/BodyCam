@@ -19,10 +19,15 @@ import { WEATHER_TYPE, writeWeatherToObject } from '../world/weatherObject.ts';
 import { clearLandscapeCache, flushLandscapes } from '../world/landscape/asset.ts';
 import { browserBlobs } from '../world/blobStore.ts';
 import { createLandscapeMode } from './modes/landscape.ts';
+import { LoadingScreen } from '../ui/loadingScreen.ts';
 
 // Einstieg des Map-Editors (editor.html). Verdrahtet Zustand, Viewport, Panels, Menüs und Tastenkürzel.
 
 const LAST_KEY = 'bodycam.editor.last';
+const FPS_KEY = 'bodycam.editor.fps';
+
+const loading = new LoadingScreen('editor');
+await loading.step(0.1, 'Editor wird gestartet …');
 
 const state = new EditorState();
 state.map = structuredClone(MAPS.start);
@@ -86,6 +91,17 @@ function loadMapData(map: MapData): void {
   localStorage.setItem(LAST_KEY, state.map.name);
   viewport.applyWorld();
   viewport.focus([]);
+}
+
+/** Map laden mit Ladebalken: baut die Szene, wartet auf Landscapes/Modelle und kompiliert die Shader */
+async function openMap(map: MapData, from = 0): Promise<void> {
+  if (!loading.visible) loading.show();
+  await loading.step(from + (1 - from) * 0.1, `„${map.name}“ wird aufgebaut …`);
+  loadMapData(map);
+  await loading.track(viewport.pendingLoads(), from + (1 - from) * 0.25, from + (1 - from) * 0.75, 'Landscapes & Modelle');
+  await loading.step(from + (1 - from) * 0.8, 'Shader werden kompiliert …');
+  await viewport.compileShaders();
+  await loading.finish();
 }
 
 async function confirmDiscard(): Promise<boolean> {
@@ -172,11 +188,11 @@ async function openDialog(): Promise<void> {
   for (const m of maps) {
     entry(m.name, new Date(m.updated).toLocaleString('de-DE'), async () => {
       const map = await loadLocalMap(m.name);
-      if (map) loadMapData(map);
+      if (map) await openMap(map);
       else toast('Map konnte nicht geladen werden', 'error');
     }, () => void deleteLocalMap(m.name));
   }
-  entry('Startmap (mitgeliefert, src/maps/start.json)', 'Vorlage', () => loadMapData(MAPS.start));
+  entry('Startmap (mitgeliefert, src/maps/start.json)', 'Vorlage', () => void openMap(MAPS.start));
   const body = h('div', {}, h('div', { style: 'color:var(--text-dim)' }, 'Im Browser gespeicherte Maps:'), list);
   close = dialog('Map öffnen', body, [
     {
@@ -194,7 +210,7 @@ async function importFile(): Promise<void> {
   if (!file || !(await confirmDiscard())) return;
   try {
     const map = await importMapFile(file);
-    loadMapData(map);
+    await openMap(map);
     state.dirty = true;
     state.emit('meta');
     toast(`„${map.name}“ importiert — Strg+S speichert sie im Browser`, 'ok', 4000);
@@ -456,6 +472,7 @@ const menus: Record<string, () => MenuItem[]> = {
       { label: 'Raster', checked: viewport.showGrid, action: () => viewport.setShowGrid(!viewport.showGrid) },
       { label: 'Nebel', checked: viewport.showFog, action: () => viewport.setShowFog(!viewport.showFog) },
       { label: 'Bloom', checked: viewport.bloomEnabled, action: () => viewport.setBloom(!viewport.bloomEnabled) },
+      { label: 'FPS anzeigen', key: 'Strg+Umsch+H', checked: viewport.showFps, action: toggleFps },
       { separator: true },
       { label: 'Content Browser', key: 'Strg+Leer', checked: !contentEl.classList.contains('hidden'), action: toggleContent },
       { label: 'Auswahl fokussieren', key: 'F', action: () => viewport.focus(state.selection) },
@@ -562,7 +579,7 @@ function setViewMode(m: ViewMode): void {
   viewBtn.innerHTML = `${icon('eyeView')}${viewLabels[m]} ▾`;
 }
 setViewMode('lit');
-const showBtn = vpBtn(`${icon('details')}Anzeigen ▾`, 'Anzeigeoptionen', (b) => showMenu(menus.Ansicht().slice(4, 8), b));
+const showBtn = vpBtn(`${icon('details')}Anzeigen ▾`, 'Anzeigeoptionen', (b) => showMenu(menus.Ansicht().slice(4, 9), b));
 viewportEl.append(h('div', { class: 'vp-overlay left' }, vpBtn(`${icon('camera')}Perspektive`, 'Perspektivische Kamera', () => {}), viewBtn, showBtn));
 
 const modeBtns: Record<GizmoMode, HTMLElement> = {
@@ -628,6 +645,20 @@ function toggleContent(): void {
   contentSplit.classList.toggle('hidden', hidden);
 }
 
+function toggleFps(): void {
+  viewport.setShowFps(!viewport.showFps);
+  try {
+    localStorage.setItem(FPS_KEY, viewport.showFps ? '1' : '0');
+  } catch {
+    /* Speicher gesperrt — Einstellung gilt nur für diese Sitzung */
+  }
+}
+try {
+  if (localStorage.getItem(FPS_KEY) === '1') viewport.setShowFps(true);
+} catch {
+  /* ignorieren */
+}
+
 // ---------- Statusanzeigen ----------
 
 state.on('meta', () => {
@@ -666,6 +697,7 @@ function showShortcuts(): void {
     ['Ende', 'Auf Boden setzen'],
     ['F2', 'Umbenennen'],
     ['H / Strg + H', 'Ausblenden / Alle einblenden'],
+    ['Strg + Umsch + H', 'FPS anzeigen'],
     ['G', 'Spielansicht (Editor-Hilfen aus)'],
     ['Strg + L halten + Maus', 'Sonne drehen'],
     ['Strg + Z / Y', 'Rückgängig / Wiederholen'],
@@ -713,7 +745,7 @@ window.addEventListener('keydown', (e) => {
     if (key === 'KeyV') return run(() => state.paste());
     if (key === 'KeyX') return run(() => state.copy() && deleteSelected());
     if (key === 'KeyA') return run(() => state.select(state.map.objects.map((o) => o.id)));
-    if (key === 'KeyH') return run(unhideAll);
+    if (key === 'KeyH') return run(e.shiftKey ? toggleFps : unhideAll);
     if (key === 'Space') return run(toggleContent);
     if (key === 'Backquote' || key === 'Backslash') return run(() => setSpace(viewport.space === 'world' ? 'local' : 'world'));
     return;
@@ -762,9 +794,16 @@ window.addEventListener('keydown', (e) => {
 
 // ---------- Start ----------
 
+await loading.step(0.15, 'Gespeicherte Map wird gelesen …');
 const last = localStorage.getItem(LAST_KEY);
-const lastMap = last ? await loadLocalMap(last) : null;
-loadMapData(lastMap ?? MAPS.start);
+let lastMap: MapData | null = null;
+try {
+  lastMap = last ? await loadLocalMap(last) : null;
+  await openMap(lastMap ?? MAPS.start, 0.2);
+} catch (e) {
+  loading.fail(`Laden fehlgeschlagen: ${(e as Error).message}`);
+  throw e;
+}
 updateCount();
 status(lastMap ? `„${lastMap.name}“ geladen` : 'Startmap geladen — Strg+S speichert sie im Browser, ▶ Spielen testet sie im Spiel');
 void details;

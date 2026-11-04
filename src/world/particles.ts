@@ -1,15 +1,21 @@
 import * as THREE from 'three';
 import { asVolume, FOG_ADDITIVE, FOG_PREMUL, PREMUL_BLEND, sharedUniforms, VOLUME_HEAD, volumeFX } from './volumetrics';
+import { collideVelocity, ParticleCollider } from './particleCollision';
+import { LightVisibility } from './lightOcclusion';
 
 // Partikeleffekte: Feuer (mit Glut/Funken, Licht, optionalem Rauch), Rauch und Funkenregen.
 // CPU-Simulation, gezeichnet als instanzierte Billboards in Weltkoordinaten (auf VOLUME_LAYER).
 // Interaktiv: Wind, Spieler und Schussbahnen verdrängen Partikel; Schüsse durch Feuer erzeugen
 // Funkenschauer, Regen dämpft Flammen.
+// Physik: Partikel kollidieren mit der Map (Rauch staut sich unter Decken und breitet sich aus,
+// Flammen schlagen an Decken um, Funken prallen von Wänden ab) und mit dem Spielerkörper
+// (Flammen weichen aus, statt durch die Beine zu brennen).
 
 const _v = new THREE.Vector3();
 const _w = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _s = new THREE.Vector3();
+const _n = new THREE.Vector3();
 
 function rng(seed: number) {
   let s = (seed * 2654435761) >>> 0 || 1;
@@ -199,6 +205,7 @@ const SMOKE_FRAG = /* glsl */ `
   uniform float uOpacity;
   uniform float uSelfLight;
   uniform vec3 uGlowColor;
+  uniform vec4 uLightVis;
   ${FRAG_HEAD}
   void main() {
     float age = vData.x;
@@ -222,7 +229,7 @@ const SMOKE_FRAG = /* glsl */ `
     vec3 lit = vAmbient * (0.55 + 0.45 * nrm.y);
     // Lichter: Vorwärtsstreuung, zusätzlich etwas Lambert über die Kugelnormale
     vec3 rd = -viewDir;
-    lit += vLightAt(vWorldP, rd, 0.35, true) * 0.12;
+    lit += vLightAtVis(vWorldP, rd, 0.35, true, uLightVis) * 0.12;
     vec3 col = uColor * lit;
     // Glut von unten (Feuer) – nimmt mit dem Alter ab
     col += uGlowColor * uSelfLight * pow(1.0 - age, 3.0) * (0.5 + 0.5 * n);
@@ -288,6 +295,40 @@ function pushByDisturbers(p: Float32Array, i4: number, v: Float32Array, dt: numb
   return hit;
 }
 
+/** Spielerkörper als festes Hindernis: Partikel (Radius r) aus der Kapsel schieben, Geschwindigkeit
+ *  in den Körper hinein aufheben (bounce > 0: abprallen). true = berührt. */
+function pushOutOfBody(p: Float32Array, i4: number, v: Float32Array, r: number, bounce = 0): boolean {
+  const b = volumeFX.body;
+  if (!b.on) return false;
+  // Kapsel steht immer senkrecht (Füße → Kopf)
+  const R = b.radius + r;
+  const ox = p[i4] - b.a.x, oz = p[i4 + 2] - b.a.z;
+  if (ox * ox + oz * oz >= R * R) return false;
+  const py = p[i4 + 1];
+  const oy = py < b.a.y ? py - b.a.y : py > b.b.y ? py - b.b.y : 0;
+  const d = Math.sqrt(ox * ox + oy * oy + oz * oz);
+  if (d >= R) return false;
+  let nx: number, ny: number, nz: number;
+  if (d < 1e-4) {
+    // genau auf der Achse: zur Seite (je Partikel andere Richtung)
+    const a = i4 * 2.399;
+    nx = Math.cos(a);
+    ny = 0;
+    nz = Math.sin(a);
+  } else {
+    nx = ox / d;
+    ny = oy / d;
+    nz = oz / d;
+  }
+  const push = R - d;
+  p[i4] += nx * push;
+  p[i4 + 1] += ny * push;
+  p[i4 + 2] += nz * push;
+  _n.set(nx, ny, nz);
+  collideVelocity(v, i4, _n, bounce, 0);
+  return true;
+}
+
 /** Abstand Punkt ↔ Strecke */
 function segDist(p: THREE.Vector3, a: THREE.Vector3, b: THREE.Vector3): number {
   _v.subVectors(b, a);
@@ -339,6 +380,12 @@ class Smoke {
   private tmpVel: Float32Array;
   private rand: () => number;
   rateMul = 1;
+  /** Welt-Kollision (null = frei durch alles) */
+  col: ParticleCollider | null = null;
+  /** Verdeckung der Effektlichter: Stichproben an der Quelle und in der Rauchwolke */
+  private lightVis = new LightVisibility(3);
+  private visAt = new THREE.Vector3(Infinity, 0, 0);
+  private mean = new THREE.Vector3();
   constructor(public p: SmokeParams, seed = 1, capacity = 0) {
     const cap = capacity || Math.min(600, Math.ceil(p.rate * p.life * 1.3) + 8);
     this.buf = new ParticleBuffer(cap, 'smoke', {
@@ -346,6 +393,7 @@ class Smoke {
       uOpacity: { value: p.opacity },
       uSelfLight: { value: p.glow ?? 0 },
       uGlowColor: { value: new THREE.Color(p.glowColor ?? '#ff6a1a') },
+      uLightVis: { value: new THREE.Vector4(1, 1, 1, 1) },
     });
     this.life = new Float32Array(cap);
     this.age = new Float32Array(cap);
@@ -399,6 +447,7 @@ class Smoke {
     const wind = volumeFX.wind;
     const drag = Math.exp(-dt * 0.6);
     let j = 0;
+    let mx = 0, my = 0, mz = 0;
     for (let i = 0; i < this.n; i++) {
       const age = this.age[i] + dt;
       if (age >= this.life[i]) continue;
@@ -424,6 +473,10 @@ class Smoke {
       vel[j4 + 1] = vel[i4 + 1];
       vel[j4 + 2] = vel[i4 + 2];
       vel[j4 + 3] = 0;
+      this.collide(j4, pos[j4 + 3], k, data[i4 + 2], origin, scale, dt);
+      mx += pos[j4];
+      my += pos[j4 + 1];
+      mz += pos[j4 + 2];
       data[j4] = k;
       data[j4 + 1] = data[i4 + 1] + dt * (data[i4 + 2] - 0.5) * 0.4;
       data[j4 + 2] = data[i4 + 2];
@@ -433,8 +486,70 @@ class Smoke {
       j++;
     }
     this.n = j;
+    if (j > 0) this.mean.set(mx / j, my / j, mz / j);
+    else this.mean.copy(origin).y += 0.5 * scale;
+    this.updateLightVis(dt, origin);
     this.sort(camPos);
     this.buf.count = this.n;
+  }
+
+  /** Lichter hinter Wänden hellen den Rauch nicht auf (grob: Quelle + Wolkenmitte + dazwischen) */
+  private updateLightVis(dt: number, origin: THREE.Vector3) {
+    const v = this.lightVis;
+    // erst neu rechnen, wenn die Wolke deutlich gewandert ist
+    if (this.visAt.distanceTo(this.mean) > 0.5) {
+      this.visAt.copy(this.mean);
+      const pt = v.points;
+      pt[0] = origin.x;
+      pt[1] = origin.y + 0.15;
+      pt[2] = origin.z;
+      pt[3] = this.mean.x;
+      pt[4] = this.mean.y;
+      pt[5] = this.mean.z;
+      pt[6] = (origin.x + this.mean.x) / 2;
+      pt[7] = (origin.y + 0.15 + this.mean.y) / 2;
+      pt[8] = (origin.z + this.mean.z) / 2;
+      v.pointsChanged();
+    }
+    if (v.update(dt, volumeFX.slots, 600)) v.average(this.buf.uniforms.uLightVis.value as THREE.Vector4);
+  }
+
+  /** Rauchballen (Index j4) gegen Spieler und Welt. Unter Decken staut er sich und quillt seitlich weg,
+   *  an Wänden gleitet er entlang. */
+  private collide(j4: number, size: number, k: number, seed: number, origin: THREE.Vector3, scale: number, dt: number) {
+    const { pos, vel } = this.buf;
+    // Kollisionskugel kleiner als das Billboard (weicher Rand, Soft Particles blenden den Rest aus);
+    // frisch ausgestoßen noch klein, damit er nicht sichtbar vom Boden springt
+    const rc = Math.min(size * 0.38, 0.75) * Math.min(1, 0.25 + k * 6);
+    pushOutOfBody(pos, j4, vel, rc * 0.45);
+    const col = this.col;
+    if (col) {
+      if (col.active && col.resolve(pos, j4, rc, _n)) {
+        collideVelocity(vel, j4, _n, 0, 1 - Math.exp(-dt * 1.2));
+        if (_n.y < -0.5) {
+          // Decke: vom Emitter weg nach außen drücken (Rauchschicht breitet sich aus)
+          let dx = pos[j4] - origin.x, dz = pos[j4 + 2] - origin.z;
+          let d = Math.hypot(dx, dz);
+          if (d < 0.05) {
+            const a = seed * Math.PI * 2;
+            dx = Math.cos(a);
+            dz = Math.sin(a);
+            d = 1;
+          }
+          const push = Math.max(0.35, Math.abs(this.p.rise) * scale) * 0.9 * dt;
+          vel[j4] += (dx / d) * push;
+          vel[j4 + 2] += (dz / d) * push;
+        } else if (_n.y > 0.5 && this.p.rise < 0) {
+          // sinkender Rauch (negativer Auftrieb) läuft am Boden auseinander
+          const dx = pos[j4] - origin.x, dz = pos[j4 + 2] - origin.z;
+          const d = Math.hypot(dx, dz) + 1e-3;
+          const push = Math.abs(this.p.rise) * scale * 0.9 * dt;
+          vel[j4] += (dx / d) * push;
+          vel[j4 + 2] += (dz / d) * push;
+        }
+      }
+      col.track(pos[j4], pos[j4 + 1], pos[j4 + 2]);
+    }
   }
 
   /** hinten → vorne sortieren (Alpha-Blending) */
@@ -478,6 +593,7 @@ class Smoke {
 export function createSmoke(p: SmokeParams, seed = 1): Effect {
   const object = new THREE.Group();
   const smoke = new Smoke(p, seed);
+  smoke.col = new ParticleCollider();
   // Partikel leben in Weltkoordinaten → nicht an die Transformation hängen
   const world = new THREE.Group();
   world.matrixAutoUpdate = false;
@@ -515,6 +631,7 @@ export function createSmoke(p: SmokeParams, seed = 1): Effect {
       const sc = worldScale(object);
       camPos.copy(volumeFX.camPosition);
       smoke.rateMul = control.intensity;
+      smoke.col!.refresh(dt, origin, (p.spread + p.size) * sc + 0.5);
       if (burst > 0) {
         smoke.emit(origin, sc, Math.round(12 * burst * volumeFX.particleScale), 2 * burst);
         burst = 0;
@@ -594,43 +711,60 @@ class Sparks {
     }
   }
 
-  update(dt: number, floorY: number) {
+  /** col: Welt-Kollision (Abprallen an Wänden/Decken/Boden), floorY: zusätzlicher Boden (Effekt-Box) */
+  update(dt: number, floorY: number, col: ParticleCollider | null = null) {
     const { pos, data, vel } = this.buf;
     const g = this.p.gravity;
     const wind = volumeFX.wind;
     const drag = Math.exp(-dt * 0.8);
+    const bounce = this.p.bounce;
+    const hasCol = !!col && col.active;
     let j = 0;
     for (let i = 0; i < this.n; i++) {
       const i4 = i * 4;
       const age = data[i4] + dt / this.life[i];
       if (age >= 1) continue;
-      vel[i4] = (vel[i4] + wind.x * 0.3 * dt) * drag;
-      vel[i4 + 1] = (vel[i4 + 1] - g * dt) * drag;
-      vel[i4 + 2] = (vel[i4 + 2] + wind.z * 0.3 * dt) * drag;
-      const x = pos[i4] + vel[i4] * dt;
-      let y = pos[i4 + 1] + vel[i4 + 1] * dt;
-      const z = pos[i4 + 2] + vel[i4 + 2] * dt;
-      if (y < floorY && vel[i4 + 1] < 0) {
-        y = floorY;
-        if (this.p.bounce > 0 && Math.abs(vel[i4 + 1]) > 0.6) {
-          vel[i4 + 1] *= -this.p.bounce;
-          vel[i4] *= 0.6;
-          vel[i4 + 2] *= 0.6;
-        } else {
-          vel[i4 + 1] = 0;
-          vel[i4] *= 0.85;
-          vel[i4 + 2] *= 0.85;
+      const j4 = j * 4;
+      pos[j4] = pos[i4];
+      pos[j4 + 1] = pos[i4 + 1];
+      pos[j4 + 2] = pos[i4 + 2];
+      pos[j4 + 3] = pos[i4 + 3];
+      vel[j4] = (vel[i4] + wind.x * 0.3 * dt) * drag;
+      vel[j4 + 1] = (vel[i4 + 1] - g * dt) * drag;
+      vel[j4 + 2] = (vel[i4 + 2] + wind.z * 0.3 * dt) * drag;
+      vel[j4 + 3] = vel[i4 + 3];
+      // schnelle Funken in Teilschritten bewegen, damit sie nicht durch dünne Wände tunneln
+      const r = Math.max(0.015, pos[j4 + 3] * 0.6);
+      const travel = Math.hypot(vel[j4], vel[j4 + 1], vel[j4 + 2]) * dt;
+      const steps = hasCol ? Math.min(4, Math.max(1, Math.ceil(travel / 0.12))) : 1;
+      const h = dt / steps;
+      for (let s = 0; s < steps; s++) {
+        pos[j4] += vel[j4] * h;
+        pos[j4 + 1] += vel[j4 + 1] * h;
+        pos[j4 + 2] += vel[j4 + 2] * h;
+        if (hasCol && col!.resolve(pos, j4, r, _n)) {
+          // flach auftreffend → rutschen, steil → abprallen (wie bisher am Boden)
+          const vn = -(vel[j4] * _n.x + vel[j4 + 1] * _n.y + vel[j4 + 2] * _n.z);
+          collideVelocity(vel, j4, _n, vn > 0.6 ? bounce : 0, vn > 0.6 ? 0.4 : 0.15);
         }
       }
-      const j4 = j * 4;
-      pos[j4] = x;
-      pos[j4 + 1] = y;
-      pos[j4 + 2] = z;
-      pos[j4 + 3] = pos[i4 + 3];
-      vel[j4] = vel[i4];
-      vel[j4 + 1] = vel[i4 + 1];
-      vel[j4 + 2] = vel[i4 + 2];
-      vel[j4 + 3] = vel[i4 + 3];
+      if (pushOutOfBody(pos, j4, vel, r, bounce)) {
+        vel[j4] += volumeFX.playerVel.x * 0.3;
+        vel[j4 + 2] += volumeFX.playerVel.z * 0.3;
+      }
+      col?.track(pos[j4], pos[j4 + 1], pos[j4 + 2]);
+      if (pos[j4 + 1] < floorY && vel[j4 + 1] < 0) {
+        pos[j4 + 1] = floorY;
+        if (bounce > 0 && Math.abs(vel[j4 + 1]) > 0.6) {
+          vel[j4 + 1] *= -bounce;
+          vel[j4] *= 0.6;
+          vel[j4 + 2] *= 0.6;
+        } else {
+          vel[j4 + 1] = 0;
+          vel[j4] *= 0.85;
+          vel[j4 + 2] *= 0.85;
+        }
+      }
       data[j4] = age;
       data[j4 + 1] = 0;
       data[j4 + 2] = data[i4 + 2];
@@ -664,6 +798,7 @@ export function createSparks(p: SparkParams, seed = 3): Effect {
   object.add(world);
   const { light, unregister } = fxLight(p.color, 6);
   object.add(light);
+  const col = new ParticleCollider();
   const origin = new THREE.Vector3();
   const down = new THREE.Vector3();
   let on = true;
@@ -712,7 +847,8 @@ export function createSparks(p: SparkParams, seed = 3): Effect {
         sparks.emit(origin, Math.round(count * k * Math.max(0.3, control.intensity)), p.speed * Math.max(0.5, sc));
         if (p.flash) flash = Math.max(flash, k);
       }
-      sparks.update(dt, floorY);
+      col.refresh(dt, origin, 0.5 + p.speed * 0.15);
+      sparks.update(dt, floorY, col);
       flash = Math.max(0, flash - dt * 9);
       light.intensity = flash * 18 * control.intensity;
       light.visible = light.intensity > 0.01;
@@ -789,6 +925,9 @@ export function createFire(p: FireParams, seed = 7): Effect {
         )
       : null;
   if (smoke) world.add(smoke.buf.mesh);
+  // eine Kollisions-Auswahl für Flammen, Glut, Treffer-Funken und Rauch
+  const col = new ParticleCollider();
+  if (smoke) smoke.col = col;
   const { light, unregister } = fxLight(p.lightColor, 6 + p.size * 6);
   light.castShadow = false;
   object.add(light);
@@ -845,6 +984,19 @@ export function createFire(p: FireParams, seed = 7): Effect {
     pos[i4] = origin.x + flameOff[i * 2];
     pos[i4 + 1] = origin.y + rand() * 0.05 * sc;
     pos[i4 + 2] = origin.z + flameOff[i * 2 + 1];
+    // Spieler steht im Feuer: dort, wo die Füße sind, entstehen keine Flammen – sie brennen ringsum
+    const body = volumeFX.body;
+    if (body.on && body.a.y - body.radius < origin.y + p.size * sc && body.b.y > origin.y) {
+      const dx = pos[i4] - body.a.x, dz = pos[i4 + 2] - body.a.z;
+      const d = Math.hypot(dx, dz);
+      const R = body.radius + 0.04;
+      if (d < R) {
+        const ux = d > 1e-3 ? dx / d : Math.cos(a), uz = d > 1e-3 ? dz / d : Math.sin(a);
+        const rr2 = R + rand() * 0.08 * sc;
+        pos[i4] = body.a.x + ux * rr2;
+        pos[i4 + 2] = body.a.z + uz * rr2;
+      }
+    }
     // innen größer, außen kleiner
     const centre = 1 - rr / (p.radius * sc + 1e-4);
     flameSize[i] = (0.18 + 0.22 * centre + rand() * 0.12) * Math.sqrt(p.size) * sc * (0.7 + 0.3 * strength);
@@ -887,6 +1039,23 @@ export function createFire(p: FireParams, seed = 7): Effect {
       vel[j4 + 1] = vel[i4 + 1];
       vel[j4 + 2] = vel[i4 + 2];
       vel[j4 + 3] = vel[i4 + 3];
+      // Spieler: Flammen lecken um den Körper herum statt hindurch
+      const rf = pos[j4 + 3] * 0.3;
+      pushOutOfBody(pos, j4, vel, rf * 0.5);
+      // Welt: unter Decken/Tischen umschlagen und nach außen rollen, an Wänden entlang
+      if (col.active && col.resolve(pos, j4, rf, _n)) {
+        collideVelocity(vel, j4, _n, 0, 0.08);
+        if (_n.y < -0.5) {
+          const ox = pos[j4] - origin.x, oz = pos[j4 + 2] - origin.z;
+          const d = Math.hypot(ox, oz);
+          const a = data[i4 + 2] * Math.PI * 2;
+          const ux = d > 0.03 ? ox / d : Math.cos(a), uz = d > 0.03 ? oz / d : Math.sin(a);
+          // Auftrieb in seitliche Bewegung umlenken (stärker als der Zug zur Flammenachse)
+          vel[j4] += ux * (3 + d * 2.4) * sc * dt;
+          vel[j4 + 2] += uz * (3 + d * 2.4) * sc * dt;
+        }
+      }
+      col.track(pos[j4], pos[j4 + 1], pos[j4 + 2]);
       data[j4] = k;
       data[j4 + 1] = data[i4 + 1];
       data[j4 + 2] = data[i4 + 2];
@@ -919,6 +1088,8 @@ export function createFire(p: FireParams, seed = 7): Effect {
       const strength = level + flare * 0.6;
       flames.uniforms.uHeat.value = THREE.MathUtils.clamp(0.75 + 0.25 * strength, 0.5, 1.15);
 
+      col.refresh(dt, origin, (p.radius + p.size) * sc + 0.5);
+
       if (pendingBurst > 0) {
         flare = Math.min(2, flare + pendingBurst);
         sparks.emit(tmpA.copy(origin).setY(origin.y + 0.2 * sc), Math.round(30 * pendingBurst * volumeFX.particleScale), 3.5 * sc);
@@ -941,8 +1112,8 @@ export function createFire(p: FireParams, seed = 7): Effect {
       }
       // Glut-Funken: nach oben treibend (negative Schwerkraft), mit Wind
       updateFlames(dt, t, sc);
-      sparks.update(dt, -1e9);
-      hitSparks.update(dt, origin.y);
+      sparks.update(dt, -1e9, col);
+      hitSparks.update(dt, origin.y, col);
       if (smoke) {
         smokeOrigin.copy(origin).setY(origin.y + p.size * sc * 0.75);
         smoke.rateMul = Math.min(1.5, strength) * (1 + volumeFX.rain * 1.5);

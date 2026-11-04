@@ -1,0 +1,77 @@
+/* Ladebildschirm für Spiel (index.html) und Editor (editor.html).
+   Liegt in public/, damit er schon sichtbar ist, bevor das JavaScript geladen ist. */
+.loading-screen {
+  --ls-bg: #000;
+  --ls-text: #e8e8e0;
+  --ls-dim: rgba(232, 232, 224, 0.55);
+  --ls-track: rgba(255, 255, 255, 0.12);
+  --ls-accent: #e3242b;
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ls-bg);
+  color: var(--ls-text);
+  font-family: Consolas, 'Courier New', monospace;
+  transition: opacity 0.35s ease;
+}
+.loading-screen.ls-editor {
+  --ls-bg: #151515;
+  --ls-text: #f2f2f2;
+  --ls-dim: #7d7d7d;
+  --ls-track: #2e2e2e;
+  --ls-accent: #0070e0;
+  font-family: 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+}
+.loading-screen.ls-done {
+  opacity: 0;
+  pointer-events: none;
+}
+.ls-box {
+  width: min(360px, calc(100vw - 32px));
+}
+.ls-title {
+  font-size: 15px;
+  letter-spacing: 0.3em;
+  margin-bottom: 14px;
+}
+.ls-title small {
+  letter-spacing: 0.05em;
+  color: var(--ls-dim);
+  margin-left: 8px;
+}
+.ls-bar {
+  height: 4px;
+  background: var(--ls-track);
+  overflow: hidden;
+}
+.ls-bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--ls-accent);
+  box-shadow: 0 0 8px var(--ls-accent);
+  transition: width 0.25s ease-out;
+}
+.ls-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--ls-dim);
+}
+.ls-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ls-error .ls-bar i {
+  background: #e5484d;
+}
+.ls-error .ls-label {
+  color: #e5484d;
+  white-space: pre-line;
+}
