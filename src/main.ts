@@ -9,7 +9,7 @@ import { CAMERA_DROP, CAMERA_FORWARD, PlayerController } from './player/controll
 import { PlayerBody } from './player/body.ts';
 import { Shooter, isSolid } from './combat/shooting.ts';
 import { BodycamShader } from './rendering/postfx/bodycam.ts';
-import { Settings, TERRAIN_DETAIL, keyLabel, type SettingsData } from './core/settings.ts';
+import { FOLIAGE_DENSITY, FOLIAGE_DISTANCE, Settings, TERRAIN_DETAIL, keyLabel, type SettingsData } from './core/settings.ts';
 import { Input } from './core/input.ts';
 import { Terminal } from './world/props/terminal.ts';
 import { loadMap, type MapNode } from './world/mapLoader.ts';
@@ -26,7 +26,12 @@ import { WEATHER_TYPE, weatherWorld } from './world/weatherObject.ts';
 import { volumeFX } from './world/volumetrics.ts';
 import { VolumePass } from './rendering/volumePass.ts';
 import { PhysicsWorld, initPhysics } from './physics/physics.ts';
-import { LandscapeRenderer, updateLandscapes } from './world/landscape/render.ts';
+import { LandscapeRenderer, landscapeSurfaceOf, surfaceAtWorld, updateLandscapes } from './world/landscape/render.ts';
+import { setFoliageQuality, setFoliageRenderer, updateFoliage, updateFoliageColliders } from './world/foliage/render.ts';
+import { setGrassEnabled, updateGrass } from './world/foliage/grass.ts';
+import { weatherSurface, type SurfaceId } from './world/surfaces.ts';
+import { roadSurfaceAt } from './world/splines/zones.ts';
+import { playFootstep, playLanding, unlockAudio } from './audio/footsteps.ts';
 import { landscapeOf } from './world/landscape/asset.ts';
 import { SCALE } from './world/collision.ts';
 import { LoadingScreen } from './ui/loadingScreen.ts';
@@ -113,6 +118,14 @@ renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = EXPOSURE * world.exposure;
 app.appendChild(renderer.domElement);
+// Foliage-Impostor werden mit diesem Renderer gebacken; Dichte/Sichtweite/Gras aus den Einstellungen
+setFoliageRenderer(renderer);
+const applyFoliageSettings = () => {
+  const d = settings.data;
+  setFoliageQuality({ density: FOLIAGE_DENSITY[d.foliageDensity] ?? 0.8, distance: FOLIAGE_DISTANCE[d.foliageDistance] ?? 1 });
+  setGrassEnabled(d.grass);
+};
+applyFoliageSettings();
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(world.background);
@@ -151,6 +164,7 @@ for (const n of level.nodes) {
 await loading.step(0.62, 'Physik wird gestartet …');
 await initPhysics();
 const physics = new PhysicsWorld(world.groundPlane);
+updateFoliageColliders(level.spawn, level.colliders);
 physics.sync(level.colliders);
 physics.step(1 / 60);
 await loading.step(0.7, 'Spieler, Wetter & Scripts …');
@@ -172,6 +186,22 @@ const applyWeather = () => {
   weather.apply(weatherWorld(world, weatherNode.data, weatherQuat));
 };
 applyWeather();
+// Oberflächen (Landscape-Layer, Wetter: nasse Erde → Schlamm, Schneedecke): Schritte und Einschläge
+unlockAudio();
+player.onFootstep = (kind, feet, speed, crouching) => {
+  // Straßen-Belag vor dem Gelände darunter
+  const ls = roadSurfaceAt(feet) ?? surfaceAtWorld(feet);
+  const surface = ls ? weatherSurface(ls, weather.wetness, weather.snowCover) : 'beton';
+  if (kind === 'land') playLanding(surface, speed, crouching);
+  else playFootstep(surface, speed, crouching);
+};
+shooter.surfaceOf = (o, p) => {
+  // Foliage (Bäume, Felsen): Oberfläche des Typs
+  const fol = o.userData.foliageSurface as SurfaceId | undefined;
+  if (fol) return weatherSurface(fol, weather.wetness, weather.snowCover);
+  const ls = landscapeSurfaceOf(o, p);
+  return ls ? weatherSurface(ls, weather.wetness, weather.snowCover) : 'beton';
+};
 weather.setLamp(body.flashlight);
 // Volumetrik: Taschenlampe beleuchtet Nebel/Rauch (inkl. Schatten im Lichtkegel)
 volumeFX.setLamp(body.flashlight);
@@ -339,7 +369,8 @@ composer.setPixelRatio(pixelRatio());
 composer.setSize(window.innerWidth, window.innerHeight);
 composer.addPass(new RenderPass(scene, camera));
 composer.addPass(new VolumePass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.55, 0.5, 1.0);
+const BLOOM_BASE_STRENGTH = 0.55;
+const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), BLOOM_BASE_STRENGTH, 0.5, 1.0);
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
 const bodycam = new ShaderPass(BodycamShader);
@@ -399,8 +430,16 @@ const applySetting = (key: keyof SettingsData) => {
     case 'terrainDetail':
       LandscapeRenderer.detail = TERRAIN_DETAIL[d.terrainDetail] ?? 2.5;
       break;
+    case 'foliageDensity':
+    case 'foliageDistance':
+    case 'grass':
+      applyFoliageSettings();
+      break;
     case 'bloom':
       bloom.enabled = d.bloom;
+      break;
+    case 'bloomStrength':
+      bloom.strength = BLOOM_BASE_STRENGTH * d.bloomStrength;
       break;
     case 'renderScale':
       updateResolution();
@@ -433,7 +472,7 @@ const updateInfo = () => {
     `Mausrad Sichtweite · ${k('fog')} Nebel · ${k('hud')} Debug-Text`;
 };
 
-for (const k of ['brightness', 'fogEnabled', 'viewDistance', 'bloom', 'renderScale', 'shadows', 'reflections', 'terrainDetail', 'hudOverlay', 'bindings'] as const) {
+for (const k of ['brightness', 'fogEnabled', 'viewDistance', 'bloom', 'bloomStrength', 'renderScale', 'shadows', 'reflections', 'terrainDetail', 'hudOverlay', 'bindings'] as const) {
   applySetting(k);
 }
 
@@ -582,12 +621,27 @@ const WEATHER_LABEL = Object.fromEntries(WEATHER_OPTIONS.map((o) => [o.value, o.
 const weatherNow = () => weather.type;
 const COVER_LABEL = { none: '', over: 'darüber', left: 'links vorbei', right: 'rechts vorbei', blocked: 'kein Platz' };
 
+// Gras-Biegung: Spieler zuerst (hinterlässt eine Spur), dann aktive NPCs
+const benderPool: THREE.Vector3[] = [];
+const benders: THREE.Vector3[] = [];
+function grassBenders(): THREE.Vector3[] {
+  benders.length = 0;
+  const add = (v: THREE.Vector3) => {
+    const b = (benderPool[benders.length] ??= new THREE.Vector3());
+    benders.push(b.copy(v));
+  };
+  add(player.feet);
+  for (const n of training?.npcs ?? []) if (n.active && benders.length < 8) add(n.feet);
+  return benders;
+}
+
 renderer.setAnimationLoop(() => {
   timer.update();
   const dt = Math.min(timer.getDelta(), 0.05);
   const t = timer.getElapsed();
 
-  // Collider-Liste (Scripts bewegen Objekte) → Rapier, danach den Spieler bewegen
+  // Collider-Liste (Scripts bewegen Objekte, Foliage-Collider rund um den Spieler) → Rapier, danach den Spieler bewegen
+  updateFoliageColliders(player.position, level.colliders);
   physics.sync(level.colliders);
   physics.step(dt);
   player.update(dt);
@@ -675,6 +729,9 @@ renderer.setAnimationLoop(() => {
   const tp = thirdPerson?.enabled && !uiActive();
   if (tp) thirdPerson!.apply(camera, player.position);
   updateLandscapes(camera);
+  // Foliage (Wind vom Wetter) und Layer-Gras (biegt sich um Spieler und NPCs)
+  updateFoliage(camera, dt, weather.windVector);
+  updateGrass(camera, dt, weather.windVector, grassBenders());
   weather.render(camera, dt);
   composer.render(dt);
   if (tp) thirdPerson!.restore(camera);

@@ -1,10 +1,19 @@
 import { CATEGORIES, PRESETS, type AssetPreset } from '../world/assets.ts';
 import { modelLabel } from '../world/modelStore.ts';
 import { CATEGORY_COLORS, icon } from './icons.ts';
-import { confirmDialog, h, pickFile, toast } from './ui.ts';
+import { confirmDialog, h, pickFile, pickFiles, toast } from './ui.ts';
 import { models } from './models.ts';
+import { textureLabel, textureLibrary, type TextureEntry } from '../world/landscape/textures.ts';
 
 // Content Browser (unten): Assets nach Ordnern, per Drag & Drop in den Viewport oder Doppelklick platzieren.
+// Ordner „Texturen“: Material-Sets für Landscape-Layer (Doppelklick = dem gewählten Layer zuweisen).
+
+const TEX_FOLDERS: Record<string, TextureEntry['group'] | null> = {
+  Texturen: null,
+  'Texturen/Prozedural': 'proc',
+  'Texturen/Projekt': 'project',
+  'Texturen/Importiert': 'idb',
+};
 
 export type Folder = 'Alle' | string;
 
@@ -22,8 +31,8 @@ export class ContentBrowser {
     this.search = h('input', { class: 'search', type: 'text', placeholder: 'Assets durchsuchen…', spellcheck: 'false', style: 'max-width:280px' });
     this.search.addEventListener('input', () => this.renderGrid());
     this.search.addEventListener('keydown', (e) => e.stopPropagation());
-    const importBtn = h('button', { class: 'btn', html: `${icon('upload')}Importieren` , title: '.glb-Modell in diesen Browser importieren' });
-    importBtn.addEventListener('click', () => this.importModel());
+    const importBtn = h('button', { class: 'btn', html: `${icon('upload')}Importieren`, title: '.glb-Modell oder (im Ordner Texturen) ein Textur-Set importieren' });
+    importBtn.addEventListener('click', () => (this.folder.startsWith('Texturen') ? void this.importTextures() : void this.importModel()));
     this.path = h('span', { style: 'color:var(--text-dim);margin-left:8px' });
     this.tree = h('div', { class: 'content-tree' });
     this.grid = h('div', { class: 'content-grid' });
@@ -33,7 +42,15 @@ export class ContentBrowser {
       h('div', { class: 'content-main' }, this.tree, this.grid),
     );
     models.onChange(() => this.render());
+    textureLibrary().onChange(() => this.render());
     this.render();
+  }
+
+  private textures(folder: string): TextureEntry[] {
+    const g = TEX_FOLDERS[folder];
+    return textureLibrary()
+      .entries()
+      .filter((e) => !g || e.group === g);
   }
 
   private presets(): AssetPreset[] {
@@ -52,7 +69,7 @@ export class ContentBrowser {
 
   render(): void {
     const all = this.presets();
-    const count = (f: string) => all.filter((p) => f === 'Alle' || p.category === f || p.category.startsWith(f + '/')).length;
+    const count = (f: string) => (f in TEX_FOLDERS ? this.textures(f).length : all.filter((p) => f === 'Alle' || p.category === f || p.category.startsWith(f + '/')).length);
     const item = (f: string, label: string, sub = false) => {
       const el = h('div', { class: `tree-item${sub ? ' sub' : ''}${this.folder === f ? ' active' : ''}`, html: `${icon('folder')}<span>${label}</span>` }, h('span', { class: 'count' }, String(count(f))));
       el.addEventListener('click', () => {
@@ -64,11 +81,59 @@ export class ContentBrowser {
     this.tree.replaceChildren(
       item('Alle', 'Alle Assets'),
       ...CATEGORIES.flatMap((c) => (c === 'Modelle' ? [item(c, c), item('Modelle/Projekt', 'Projekt', true), item('Modelle/Importiert', 'Importiert', true)] : [item(c, c)])),
+      item('Texturen', 'Texturen'),
+      item('Texturen/Prozedural', 'Prozedural', true),
+      item('Texturen/Projekt', 'Projekt', true),
+      item('Texturen/Importiert', 'Importiert', true),
     );
     this.renderGrid();
   }
 
+  private renderTextures(): void {
+    const q = this.search.value.trim().toLowerCase();
+    const list = this.textures(this.folder).filter((e) => !q || e.label.toLowerCase().includes(q));
+    this.path.textContent = `Inhalt › ${this.folder.replace('/', ' › ')}`;
+    const lib = textureLibrary();
+    this.grid.replaceChildren(
+      ...list.map((e) => {
+        const img = h('img', { class: 'tex-thumb', alt: '' }) as HTMLImageElement;
+        void lib.thumbnail(e.ref).then((u) => (img.src = u));
+        const tile = h(
+          'div',
+          { class: 'tile', title: `${e.label}\nDoppelklick: dem gewählten Landscape-Layer zuweisen (Landscape-Modus, Werkzeug „Malen“)` },
+          h('div', { class: 'thumb' }, img),
+          h('div', { class: 'bar', style: 'background:#8a6d3b' }),
+          h('div', { class: 'label' }, e.label),
+        );
+        if (e.group === 'idb') {
+          const del = h('div', { class: 'del', title: 'Aus dem Browser löschen', html: icon('trash', 'width="12" height="12"') });
+          del.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            if (await confirmDialog('Textur löschen', `„${e.label}“ aus dem Browser-Speicher löschen? Layer, die sie verwenden, zeigen dann Erde.`, 'Löschen', true)) {
+              await lib.remove(e.ref);
+            }
+          });
+          tile.append(del);
+        }
+        tile.addEventListener('dblclick', () => {
+          if (!lib.pick(e.ref)) toast('Erst in den Landscape-Modus wechseln, Werkzeug „Malen“ und einen Layer wählen', 'info', 4000);
+        });
+        return tile;
+      }),
+    );
+    if (!list.length) {
+      const hint =
+        this.folder === 'Texturen/Projekt'
+          ? 'Keine Projekt-Texturen. Lege je Set einen Ordner in public/assets/textures/ an (z. B. fels/fels_albedo.png, fels_normal.png, fels_roughness.png).'
+          : this.folder === 'Texturen/Importiert'
+            ? 'Noch nichts importiert. „Importieren“ wählt die Bilder eines Sets (Albedo, Normal, Roughness, AO, Height).'
+            : 'Keine passenden Texturen.';
+      this.grid.append(h('div', { class: 'empty-hint', style: 'grid-column:1/-1' }, hint));
+    }
+  }
+
   private renderGrid(): void {
+    if (this.folder.startsWith('Texturen')) return this.renderTextures();
     const q = this.search.value.trim().toLowerCase();
     const list = this.presets().filter(
       (p) => (this.folder === 'Alle' || p.category === this.folder || p.category.startsWith(this.folder + '/')) && (!q || p.label.toLowerCase().includes(q)),
@@ -110,6 +175,19 @@ export class ContentBrowser {
         ? 'Keine Modelle. Lege .glb-Dateien nach public/assets/models/ oder klicke „Importieren“.'
         : 'Keine passenden Assets.';
       this.grid.append(h('div', { class: 'empty-hint', style: 'grid-column:1/-1' }, hint));
+    }
+  }
+
+  private async importTextures(): Promise<void> {
+    const files = await pickFiles('.png,.jpg,.jpeg,.webp');
+    if (!files.length) return;
+    try {
+      const ref = await textureLibrary().import(files);
+      this.folder = 'Texturen/Importiert';
+      this.render();
+      toast(`Textur-Set „${textureLabel(ref)}“ importiert — Doppelklick weist es dem gewählten Layer zu`, 'ok', 4000);
+    } catch (e) {
+      toast((e as Error).message, 'error', 5000);
     }
   }
 

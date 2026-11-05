@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { volumeFX } from '../world/volumetrics.ts';
+import { SURFACES, type SurfaceId } from '../world/surfaces.ts';
 
 export interface ShotResult {
   hit: boolean;
@@ -47,6 +48,8 @@ export class Shooter {
     polygonOffset: true,
     polygonOffsetFactor: -4,
   });
+  /** Oberfläche am Treffer (Landscape-Layer, Wetter); ohne Angabe Beton */
+  surfaceOf?: (object: THREE.Object3D, point: THREE.Vector3) => SurfaceId;
 
   constructor(
     scene: THREE.Scene,
@@ -87,7 +90,7 @@ export class Shooter {
       ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld)
       : ray.direction.clone().negate();
     this.spawnHole(hit.point, normal);
-    this.spawnImpact(hit.point, normal);
+    this.spawnImpact(hit.point, normal, this.surfaceOf?.(hit.object, hit.point) ?? 'beton');
 
     return { hit: true, point: hit.point.clone(), distance: hit.distance, object: hit.object };
   }
@@ -120,11 +123,14 @@ export class Shooter {
     if (this.holes.length > MAX_HOLES) this.group.remove(this.holes.shift()!);
   }
 
-  private spawnImpact(point: THREE.Vector3, normal: THREE.Vector3): void {
-    // Funken: schnell, leuchtend, fallen
-    this.addEffect(this.particles(point, normal, 10, 3.5, 1.6, { color: 0xffb04a, size: 0.035, additive: true }, 0.3, 9.81));
-    // Staub: langsam, grau, schwebt
-    this.addEffect(this.particles(point, normal, 14, 0.7, 0.5, { color: 0x8a8580, size: 0.09, additive: false }, 0.9, 0.6));
+  private spawnImpact(point: THREE.Vector3, normal: THREE.Vector3, surface: SurfaceId): void {
+    const fx = SURFACES[surface].impact;
+    // Funken: schnell, leuchtend, fallen (nur harte Böden)
+    if (fx.sparks) this.addEffect(this.particles(point, normal, 10, 3.5, 1.6, { color: 0xffb04a, size: 0.035, additive: true }, 0.3, 9.81));
+    // Brocken: Erde, Kies, Grasfetzen … fliegen hoch und fallen zurück
+    this.addEffect(this.particles(point, normal, Math.round(6 + fx.amount * 4), 2.2, 1.1, { color: fx.chips, size: 0.045, additive: false, opacity: 0.95 }, 0.7, 9.81));
+    // Staub: langsam, schwebt; Menge und Farbe je Oberfläche (Sand/Schnee stauben stark)
+    this.addEffect(this.particles(point, normal, Math.round(14 * fx.amount), 0.7, 0.5, { color: fx.dust, size: 0.09 * (0.8 + fx.amount * 0.2), additive: false }, 0.9 + fx.amount * 0.2, 0.6));
   }
 
   private particles(
@@ -133,7 +139,7 @@ export class Shooter {
     count: number,
     speed: number,
     spread: number,
-    look: { color: number; size: number; additive: boolean },
+    look: { color: number; size: number; additive: boolean; opacity?: number },
     ttl: number,
     gravity: number,
   ): Effect {
@@ -152,7 +158,7 @@ export class Shooter {
       color: look.color,
       size: look.size,
       transparent: true,
-      opacity: look.additive ? 1 : 0.5,
+      opacity: look.opacity ?? (look.additive ? 1 : 0.5),
       depthWrite: false,
       blending: look.additive ? THREE.AdditiveBlending : THREE.NormalBlending,
     });

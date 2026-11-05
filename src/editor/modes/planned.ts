@@ -22,13 +22,6 @@ export const PLANNED: PlannedInfo[] = [
     tools: ['Landscape anlegen (Größe, Auflösung pro Quad)', 'Anheben/Senken, Glätten, Abflachen, Rampe, Noise', 'Erosion (hydraulisch/thermisch)', 'Löcher, Region-Tools (Kopieren, Verschieben)', 'Heightmap Import/Export (16-bit PNG/RAW)', 'Bis 8 Mal-Layer, Auto-Material, Triplanar'],
   },
   {
-    id: 'foliage',
-    label: 'Foliage',
-    icon: 'leaf',
-    phase: 'Phase 3',
-    tools: ['Foliage-Typen (Mesh, Dichte, Skalierung, Ausrichtung)', 'Pinsel: Malen, Radieren, Auswählen', 'Malen auf Landscape und Meshes', 'Layer-Gras automatisch je Mal-Layer', 'Wind, Biegen durch den Spieler, Kollision'],
-  },
-  {
     id: 'modeling',
     label: 'Modeling',
     icon: 'brush',

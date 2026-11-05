@@ -19,6 +19,9 @@ import { WEATHER_TYPE, writeWeatherToObject } from '../world/weatherObject.ts';
 import { clearLandscapeCache, flushLandscapes } from '../world/landscape/asset.ts';
 import { browserBlobs } from '../world/blobStore.ts';
 import { createLandscapeMode } from './modes/landscape.ts';
+import { createFoliageMode } from './modes/foliage.ts';
+import { createSplinesMode, installSplineAttachments } from './modes/splines.ts';
+import { clearFoliageCache, flushFoliage } from '../world/foliage/asset.ts';
 import { LoadingScreen } from '../ui/loadingScreen.ts';
 
 // Einstieg des Map-Editors (editor.html). Verdrahtet Zustand, Viewport, Panels, Menüs und Tastenkürzel.
@@ -76,10 +79,17 @@ initSplitters();
 // Editor-Modi (Auswahl, Landscape, Foliage, …); Werkzeug-Panel liegt über der Details-Spalte
 const modes = new ModeManager({ state, viewport, status: (m, err) => status(m, err) }, document.getElementById('details')!);
 modes.register(createLandscapeMode({ state, viewport, status: (m, err) => status(m, err) }));
+modes.register(createFoliageMode({ state, viewport, status: (m, err) => status(m, err) }));
+modes.register(createSplinesMode({ state, viewport, status: (m, err) => status(m, err) }));
+// Kabel hängen an Strommasten: Punkte folgen, wenn ein Mast bewegt wird
+installSplineAttachments(state);
+// Entwicklung: Zugriff für automatisierte Tests im Browser
+if (import.meta.env.DEV) (window as unknown as { __editor: unknown }).__editor = { state, viewport, modes };
 
-/** Geänderte Landscape-Höhendaten als Blobs schreiben (vor Speichern/Export) */
+/** Geänderte Landscape- und Foliage-Daten als Blobs schreiben (vor Speichern/Export) */
 async function flushData(): Promise<void> {
   await flushLandscapes(state.map.objects, (b) => browserBlobs.put(b));
+  await flushFoliage(state.map.objects, (b) => browserBlobs.put(b));
 }
 
 // ---------- Map laden / speichern ----------
@@ -87,6 +97,7 @@ async function flushData(): Promise<void> {
 function loadMapData(map: MapData): void {
   if (viewport.simulating) viewport.stopSimulation();
   clearLandscapeCache();
+  clearFoliageCache();
   state.load(normalizeMap(structuredClone(map)));
   localStorage.setItem(LAST_KEY, state.map.name);
   viewport.applyWorld();
@@ -706,6 +717,13 @@ function showShortcuts(): void {
     ['Alt + P', 'Im Spiel testen'],
     ['Alt + S / Esc', 'Simulieren / Stopp'],
     ['Strg + Leertaste', 'Content Browser ein/aus'],
+    ['Umsch + 1 … 6', 'Modus: Auswahl, Landscape, Foliage, …'],
+    ['1 … 9 (Landscape)', 'Werkzeug: Formen … Region, Malen'],
+    ['1 … 5 (Foliage)', 'Werkzeug: Malen, Radieren, Auswählen, Neu anwenden, Füllen'],
+    ['[ / ] · Strg + Mausrad', 'Pinselgröße (Landscape, Foliage)'],
+    ['Strg + Umsch + Mausrad', 'Pinselstärke (Landscape) / Dichte (Foliage)'],
+    ['Umsch + Pinsel', 'Umkehren: senken / Loch füllen / Layer / Foliage radieren'],
+    ['Entf (Foliage)', 'Ausgewählte Instanzen löschen'],
   ];
   dialog('Tastenkürzel', h('div', { class: 'shortcuts' }, ...rows.flatMap(([k, v]) => [h('kbd', {}, k), h('span', {}, v)])), [{ label: 'OK', primary: true }]);
 }

@@ -1,6 +1,7 @@
 import { defineConfig, type Plugin } from 'vite';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
+import { IMAGE_RE, groupTextureFiles } from './src/world/landscape/textureFiles.ts';
 
 const MODELS_DIR = resolve('public/assets/models');
 const MODELS_ID = 'virtual:bodycam-models';
@@ -35,9 +36,64 @@ function modelList(): Plugin {
   };
 }
 
+const TEXTURES_DIR = resolve('public/assets/textures');
+const TEXTURES_ID = 'virtual:bodycam-textures';
+/** Kanal-Endungen, die bei losen Dateien zum selben Set gehören (rock_albedo.png + rock_normal.png → "rock") */
+const CHANNEL_SUFFIX = /[_\-. ](albedo|basecolor|base_color|diffuse|diff|colou?r|col|normal|nrm|nor|normalgl|normaldx|rough|roughness|rgh|ao|ambientocclusion|occlusion|height|disp|displacement|bump|arm)([_\-. ].*)?$/i;
+
+/**
+ * Liefert die Textur-Sets unter public/assets/textures: jeder Unterordner ist ein Set (Albedo, Normal, Rauheit,
+ * AO, Höhe — Zuordnung über den Dateinamen), lose Bilder werden über ihren Namensanfang gruppiert.
+ */
+function textureList(): Plugin {
+  const resolvedId = '\0' + TEXTURES_ID;
+  const url = (full: string) => '/assets/textures/' + relative(TEXTURES_DIR, full).split('\\').join('/');
+  const scan = () => {
+    if (!existsSync(TEXTURES_DIR)) return [];
+    const sets: { name: string; files: Record<string, string> }[] = [];
+    const loose = new Map<string, string[]>();
+    const walk = (dir: string): string[] =>
+      readdirSync(dir).flatMap((n) => {
+        const full = join(dir, n);
+        return statSync(full).isDirectory() ? walk(full) : IMAGE_RE.test(n) ? [full] : [];
+      });
+    for (const name of readdirSync(TEXTURES_DIR).sort()) {
+      const full = join(TEXTURES_DIR, name);
+      if (statSync(full).isDirectory()) {
+        const files = groupTextureFiles(walk(full).map(url));
+        if (files.albedo || files.normal) sets.push({ name, files: files as Record<string, string> });
+      } else if (IMAGE_RE.test(name)) {
+        const key = name.replace(/\.[^.]+$/, '').replace(CHANNEL_SUFFIX, '') || name;
+        loose.set(key, [...(loose.get(key) ?? []), url(full)]);
+      }
+    }
+    for (const [name, list] of loose) {
+      const files = groupTextureFiles(list);
+      if (files.albedo || files.normal) sets.push({ name, files: files as Record<string, string> });
+    }
+    return sets.sort((a, b) => a.name.localeCompare(b.name));
+  };
+  return {
+    name: 'bodycam-textures',
+    resolveId: (id) => (id === TEXTURES_ID ? resolvedId : undefined),
+    load: (id) => (id === resolvedId ? `export default ${JSON.stringify(scan())};` : undefined),
+    configureServer(server) {
+      server.watcher.add(TEXTURES_DIR);
+      const refresh = (file: string) => {
+        if (!resolve(file).startsWith(TEXTURES_DIR)) return;
+        const mod = server.moduleGraph.getModuleById(resolvedId);
+        if (mod) server.moduleGraph.invalidateModule(mod);
+        server.ws.send({ type: 'custom', event: 'bodycam:textures', data: scan() });
+      };
+      server.watcher.on('add', refresh);
+      server.watcher.on('unlink', refresh);
+    },
+  };
+}
+
 export default defineConfig({
   root: '.',
-  plugins: [modelList()],
+  plugins: [modelList(), textureList()],
   server: {
     port: 5173,
   },

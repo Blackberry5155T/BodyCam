@@ -1,0 +1,119 @@
+import { SURFACES, type StepSound, type SurfaceId } from '../world/surfaces.ts';
+
+// Schrittgeräusche ohne Audiodateien: je Oberfläche aus Ferse (gedämpfter Sinus), gefiltertem Rauschen,
+// kurzen Knirsch-Klicks (Kies, Schnee) und einem Schmatzen (Schlamm) zusammengesetzt (Parameter in surfaces.ts).
+// Der AudioContext startet erst nach einer Benutzeraktion (Browser-Regel).
+
+let ctx: AudioContext | null = null;
+let master: GainNode | null = null;
+let noise: AudioBuffer | null = null;
+
+function audio(): AudioContext | null {
+  if (ctx) return ctx;
+  try {
+    ctx = new AudioContext();
+  } catch {
+    return null;
+  }
+  master = ctx.createGain();
+  master.gain.value = 0.55;
+  master.connect(ctx.destination);
+  // 2 s weißes Rauschen, jeder Schritt liest ab einer zufälligen Stelle
+  noise = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+  const d = noise.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  return ctx;
+}
+
+/** beim ersten Klick/Tastendruck freischalten */
+export function unlockAudio(): void {
+  const unlock = () => {
+    const a = audio();
+    if (a && a.state !== 'running') void a.resume();
+  };
+  window.addEventListener('pointerdown', unlock, { capture: true });
+  window.addEventListener('keydown', unlock, { capture: true });
+}
+
+function envelope(a: AudioContext, t: number, peak: number, attack: number, decay: number): GainNode {
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), t + attack);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + attack + decay);
+  return g;
+}
+
+function noiseSource(a: AudioContext, t: number, len: number): AudioBufferSourceNode {
+  const src = a.createBufferSource();
+  src.buffer = noise;
+  src.playbackRate.value = 0.9 + Math.random() * 0.2;
+  src.start(t, Math.random() * 1.5, len + 0.05);
+  return src;
+}
+
+function filter(a: AudioContext, type: BiquadFilterType, hz: number, q = 0.7): BiquadFilterNode {
+  const f = a.createBiquadFilter();
+  f.type = type;
+  f.frequency.value = hz;
+  f.Q.value = q;
+  return f;
+}
+
+function play(s: StepSound, vol: number, heavy: number): void {
+  const a = audio();
+  if (!a || !master || a.state !== 'running' || vol <= 0.001) return;
+  const t = a.currentTime + 0.005;
+  const pitch = 0.92 + Math.random() * 0.16;
+  const out = a.createGain();
+  out.gain.value = vol;
+  out.connect(master);
+
+  // Ferse: kurzer Sinus mit fallender Tonhöhe
+  if (s.thump > 0) {
+    const o = a.createOscillator();
+    o.frequency.setValueAtTime(s.thumpHz * pitch * 1.6, t);
+    o.frequency.exponentialRampToValueAtTime(s.thumpHz * pitch * 0.6, t + 0.09);
+    const g = envelope(a, t, s.thump * (1 + heavy), 0.004, 0.09 + heavy * 0.08);
+    o.connect(g).connect(out);
+    o.start(t);
+    o.stop(t + 0.25);
+  }
+  // Sohle/Material: gefiltertes Rauschen
+  if (s.noise > 0) {
+    const len = s.dur * (1 + heavy * 0.6);
+    const src = noiseSource(a, t, len);
+    const g = envelope(a, t, s.noise, 0.006, len);
+    src.connect(filter(a, 'highpass', s.hp * pitch)).connect(filter(a, 'lowpass', s.lp * pitch)).connect(g).connect(out);
+  }
+  // Knirschen: viele winzige Klicks
+  const grains = Math.round(s.grains * (0.7 + Math.random() * 0.6) * (1 + heavy));
+  for (let i = 0; i < grains; i++) {
+    const tg = t + Math.random() * s.spread;
+    const len = 0.004 + Math.random() * 0.01;
+    const src = noiseSource(a, tg, len);
+    const g = envelope(a, tg, s.noise * (0.3 + Math.random() * 0.7), 0.001, len);
+    src.connect(filter(a, 'highpass', s.grainHp * (0.7 + Math.random() * 0.8))).connect(g).connect(out);
+  }
+  // Schmatzen: Bandpass gleitet nach oben
+  if (s.squelch) {
+    const len = 0.16 + Math.random() * 0.06;
+    const src = noiseSource(a, t + 0.03, len);
+    const bp = filter(a, 'bandpass', 260, 7);
+    bp.frequency.setValueAtTime(260 * pitch, t + 0.03);
+    bp.frequency.exponentialRampToValueAtTime(1500 * pitch, t + 0.03 + len);
+    const g = envelope(a, t + 0.03, s.squelch * 2.2, 0.02, len);
+    src.connect(bp).connect(g).connect(out);
+  }
+}
+
+/** Schritt: Tempo in m/s (Gehen ≈ 2, Sprint ≈ 6) */
+export function playFootstep(surface: SurfaceId, speed: number, crouching: boolean): void {
+  const vol = Math.min(1, 0.35 + speed * 0.11) * (crouching ? 0.4 : 1);
+  play(SURFACES[surface].step, vol, 0);
+}
+
+/** Landung: Aufprall in m/s */
+export function playLanding(surface: SurfaceId, impact: number, crouching: boolean): void {
+  const k = Math.min(1, (impact - 2) / 6);
+  play(SURFACES[surface].step, (0.75 + k * 0.35) * (crouching ? 0.7 : 1), 0.4 + k * 0.6);
+}

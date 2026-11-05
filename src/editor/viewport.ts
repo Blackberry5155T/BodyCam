@@ -22,6 +22,9 @@ import { VolumePass } from '../rendering/volumePass.ts';
 import type { ModeInput } from './modes/types.ts';
 import { browserBlobs } from '../world/blobStore.ts';
 import { updateLandscapes } from '../world/landscape/render.ts';
+import { updateDeforms } from '../world/splines/deform.ts';
+import { setFoliageRenderer, updateFoliage } from '../world/foliage/render.ts';
+import { updateGrass } from '../world/foliage/grass.ts';
 
 // 3D-Viewport des Editors: Navigation wie in UE5 (RMT + WASD fliegen, MMT schieben, Alt+LMT orbit,
 // Mausrad vor/zurück), Gizmo (W/E/R), Auswahl mit Outline, Drag & Drop aus dem Content Browser.
@@ -147,6 +150,7 @@ export class Viewport {
     this.world = new WorldRig(state.map.world);
     this.scene.add(this.world.group);
     this.weather = new Weather(this.renderer, this.scene, this.world);
+    setFoliageRenderer(this.renderer);
 
     // Raster: 1-m-Linien + 10-m-Linien
     const minor = new THREE.GridHelper(400, 400, 0x3a3a3a, 0x3a3a3a);
@@ -811,6 +815,23 @@ export class Viewport {
     return { point: ray.at(8, new THREE.Vector3()), normal: new THREE.Vector3(0, 1, 0) };
   }
 
+  /** Foliage: erste anklickbare Mesh-Fläche entlang eines Strahls (ohne Boden-Ersatz); skip = Objekt-IDs auslassen */
+  castSurface(ray: THREE.Ray, far: number, skip?: (id: string, type: string) => boolean): { point: THREE.Vector3; normal: THREE.Vector3; id: string } | null {
+    this.raycaster.ray.copy(ray);
+    this.raycaster.near = 0;
+    this.raycaster.far = far;
+    this.raycaster.layers.set(0);
+    const hits = this.raycaster.intersectObjects(this.mapGroup.children, true);
+    this.raycaster.far = Infinity;
+    for (const hit of hits) {
+      const node = nodeOf(hit.object);
+      if (!node || skip?.(node.data.id, node.data.type) || !this.pickable(hit.object) || !(hit.object as THREE.Mesh).isMesh || !hit.face) continue;
+      const normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize();
+      return { point: hit.point.clone(), normal, id: node.data.id };
+    }
+    return null;
+  }
+
   /** Setzt ein Objekt so auf eine Fläche, dass es aufliegt statt einzusinken */
   placeOnSurface(id: string, point: THREE.Vector3, normal: THREE.Vector3): void {
     const node = this.entries.get(id)?.node;
@@ -1066,7 +1087,13 @@ export class Viewport {
     }
     this.weather.update(dt, t, this.camera);
     this.weather.render(this.camera, dt);
+    // Straßen formen das Gelände (vor dem Landscape-Update, damit neue Höhen sofort sichtbar sind)
+    updateDeforms();
     updateLandscapes(this.camera);
+    // Foliage und Layer-Gras: Wind vom Wetter; beim Simulieren biegt die Kamera (= Spieler) das Gras
+    const wind = this.weather.windVector;
+    updateFoliage(this.camera, dt, wind);
+    updateGrass(this.camera, dt, wind, this.runtime ? [_feet.set(p.x, this.weather.groundHeight, p.z)] : []);
     this.renderer.clear();
     this.composer.render(dt);
     this.renderer.clearDepth();

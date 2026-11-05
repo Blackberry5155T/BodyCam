@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { deflateSync, inflateSync } from 'fflate';
+import type { SurfaceId } from '../surfaces.ts';
+import { MAX_LAYERS, autoCoverage, autoNoise, cloneLayers, defaultLayers, type LandscapeLayer } from './layers.ts';
 
 // Höhendaten einer Landscape (wie in UE5: Raster aus Komponenten à 128 × 128 Quads).
 // Koordinaten: lokales Raster, Ursprung = Mitte der Landscape (Objektposition), x nach +X, z nach +Z.
@@ -7,6 +9,13 @@ import { deflateSync, inflateSync } from 'fflate';
 // heights: (W+1)·(H+1) Werte, zeilenweise (iz · (W+1) + ix), Meter relativ zur Objekthöhe.
 // holes: Loch-Zellen, 1 = Loch (kein Rendering, keine Kollision). Jedes Quad ist in holeSub × holeSub Zellen
 // geteilt (Loch-Auflösung, je Landscape einstellbar): HW = W · holeSub Zellen je Zeile, HH = H · holeSub Zeilen.
+// layers/splat: Material-Layer und gemalte Gewichte (Splatmap). Die Splatmap hat SW × SH Punkte (bei großen
+// Landscapes jeder zweite Gitterpunkt) und 8 Kanäle in zwei RGBA-Ebenen übereinander: Zeilen 0..SH-1 = Kanäle
+// 0–3, Zeilen SH..2·SH-1 = Kanäle 4–7. Summe der Kanäle ≤ 255; der Rest gehört den Auto-Regeln.
+// grassMask: im Foliage-Modus radiertes Layer-Gras, SW × SH Bytes (0 = Gras wie vom Layer, 255 = kein Gras).
+// base/deforms (nur Editor): Straßen-Splines formen das Gelände nicht-destruktiv. Solange Verformungen aktiv sind,
+// hält `base` die gemalten Höhen und `heights` ist base + Verformungen (gespeichert wird beides, das Spiel nutzt
+// nur heights). Werkzeuge schreiben deshalb in `editHeights`.
 
 export const COMPONENT_QUADS = 128;
 /** Kantenlänge eines Min/Max-Blocks (= kleinster CDLOD-Knoten) in Quads */
@@ -25,9 +34,24 @@ export interface Rect {
   h: number;
 }
 
-/** height: Rechteck in Gitterpunkten · holes: in Loch-Zellen · holeRes: Loch-Auflösung geändert (ganze Fläche) */
-export type ChangeKind = 'height' | 'holes' | 'holeRes';
+/**
+ * height: Rechteck in Gitterpunkten · holes: in Loch-Zellen · holeRes: Loch-Auflösung geändert (ganze Fläche)
+ * splat: Rechteck in Splat-Texeln (beide Ebenen, y bis 2·SH) · layers: Layer-Liste geändert
+ * grass: Rechteck in Splat-Texeln (Gras-Maske, eine Ebene)
+ */
+export type ChangeKind = 'height' | 'holes' | 'holeRes' | 'splat' | 'layers' | 'grass';
 export type ChangeListener = (r: Rect, kind: ChangeKind) => void;
+
+/** Höhen-Verformung (z. B. Straße): zieht das Gelände im Rechteck mit `weight` auf `target` */
+export interface HeightDeform {
+  /** Rechteck in Gitterpunkten */
+  rect: Rect;
+  /** Zielhöhe (m, lokal) und Gewicht 0..1 je Gitterpunkt im Rechteck (zeilenweise, rect.w breit) */
+  target: Float32Array;
+  weight: Float32Array;
+  /** Reihenfolge (kleinere zuerst, spätere gewinnen) */
+  order: number;
+}
 
 export class LandscapeData {
   readonly W: number;
@@ -47,6 +71,16 @@ export class LandscapeData {
   private listeners = new Set<ChangeListener>();
   /** Erhöht sich bei jeder Änderung (für "muss gespeichert werden") */
   revision = 0;
+  /** Material-Layer (Index 0 = Basis) */
+  layers: LandscapeLayer[];
+  /** gemalte Layer-Gewichte; null = noch nichts gemalt (nur Auto-Regeln) */
+  splat: Uint8Array | null = null;
+  /** radiertes Layer-Gras (SW × SH, 255 = entfernt); null = nichts radiert */
+  grassMask: Uint8Array | null = null;
+  /** gemalte Höhen, solange Verformungen aktiv sind (sonst null: heights sind die gemalten Höhen) */
+  base: Float32Array | null = null;
+  /** aktive Verformungen (Straßen-Splines) */
+  readonly deforms = new Map<string, HeightDeform>();
 
   constructor(
     compX: number,
@@ -55,6 +89,8 @@ export class LandscapeData {
     heights?: Float32Array,
     holes?: Uint8Array,
     holeSub = 1,
+    layers?: LandscapeLayer[],
+    splat?: Uint8Array | null,
   ) {
     this.compX = compX;
     this.compZ = compZ;
@@ -67,6 +103,8 @@ export class LandscapeData {
     this.holes = holes ?? new Uint8Array(this.HW * this.HH);
     if (this.holes.length !== this.HW * this.HH) throw new Error('Lochdaten passen nicht zur Loch-Auflösung');
     this.compHoles = new Uint32Array(compX * compZ);
+    this.layers = layers ?? defaultLayers();
+    if (splat && splat.length === this.SW * this.SH * 8) this.splat = splat;
     let bw = this.W / BLOCK;
     let bh = this.H / BLOCK;
     for (;;) {
@@ -120,7 +158,209 @@ export class LandscapeData {
   }
 
   clone(): LandscapeData {
-    return new LandscapeData(this.compX, this.compZ, this.quadSize, this.heights.slice(), this.holes.slice(), this.holeSub);
+    const c = new LandscapeData(this.compX, this.compZ, this.quadSize, this.heights.slice(), this.holes.slice(), this.holeSub, cloneLayers(this.layers), this.splat?.slice() ?? null);
+    c.grassMask = this.grassMask?.slice() ?? null;
+    c.base = this.base?.slice() ?? null;
+    return c;
+  }
+
+  // ---------- Verformungen (Straßen) ----------
+
+  /** Höhen, in die Werkzeuge schreiben (gemalte Höhen ohne Straßen) */
+  get editHeights(): Float32Array {
+    return this.base ?? this.heights;
+  }
+
+  /** Verformung setzen/ersetzen (null = entfernen) und den betroffenen Bereich neu zusammensetzen */
+  setDeform(id: string, def: HeightDeform | null): void {
+    const old = this.deforms.get(id);
+    if (!old && !def) return;
+    if (!this.base) this.base = this.heights.slice();
+    if (def) this.deforms.set(id, def);
+    else this.deforms.delete(id);
+    let r = old?.rect ?? def!.rect;
+    if (old && def) {
+      const x0 = Math.min(old.rect.x, def.rect.x);
+      const y0 = Math.min(old.rect.y, def.rect.y);
+      r = { x: x0, y: y0, w: Math.max(old.rect.x + old.rect.w, def.rect.x + def.rect.w) - x0, h: Math.max(old.rect.y + old.rect.h, def.rect.y + def.rect.h) - y0 };
+    }
+    const c = this.clip(r);
+    if (c) this.recompose(c);
+    if (!this.deforms.size) this.base = null;
+    if (!c) return;
+    this.revision++;
+    this.updateBounds(c);
+    for (const fn of this.listeners) fn(c, 'height');
+  }
+
+  /** alle Verformungen entfernen (heights = gemalte Höhen) */
+  clearDeforms(): void {
+    if (!this.base) return;
+    this.deforms.clear();
+    this.heights.set(this.base);
+    this.base = null;
+    const full = { x: 0, y: 0, w: this.VW, h: this.VH };
+    this.revision++;
+    this.updateBounds(full);
+    for (const fn of this.listeners) fn(full, 'height');
+  }
+
+  /** heights = base + Verformungen im Rechteck */
+  private recompose(r: Rect): void {
+    const base = this.base;
+    if (!base) return;
+    const hs = this.heights;
+    const VW = this.VW;
+    for (let z = r.y; z < r.y + r.h; z++) {
+      const row = z * VW;
+      hs.set(base.subarray(row + r.x, row + r.x + r.w), row + r.x);
+    }
+    const list = [...this.deforms.values()].sort((a, b) => a.order - b.order);
+    for (const d of list) {
+      const x0 = Math.max(r.x, d.rect.x);
+      const z0 = Math.max(r.y, d.rect.y);
+      const x1 = Math.min(r.x + r.w, d.rect.x + d.rect.w);
+      const z1 = Math.min(r.y + r.h, d.rect.y + d.rect.h);
+      for (let z = z0; z < z1; z++) {
+        const row = z * VW;
+        const drow = (z - d.rect.y) * d.rect.w - d.rect.x;
+        for (let x = x0; x < x1; x++) {
+          const w = d.weight[drow + x];
+          if (w > 0) hs[row + x] += (d.target[drow + x] - hs[row + x]) * w;
+        }
+      }
+    }
+  }
+
+  // ---------- Gras-Maske ----------
+
+  /** Gras-Maske anlegen, falls noch keine existiert (vor dem ersten Radieren) */
+  ensureGrassMask(): Uint8Array {
+    if (!this.grassMask) this.grassMask = new Uint8Array(this.SW * this.SH);
+    return this.grassMask;
+  }
+
+  /** ganze Gras-Maske ersetzen (Import) */
+  setGrassMask(m: Uint8Array | null): void {
+    if (m && m.length !== this.SW * this.SH) throw new Error('Gras-Maske passt nicht zur Landscape-Größe');
+    this.grassMask = m;
+    this.revision++;
+    for (const fn of this.listeners) fn({ x: 0, y: 0, w: this.SW, h: this.SH }, 'grass');
+  }
+
+  /** verbleibender Gras-Anteil (0..1) an einer Gitterkoordinate, bilinear */
+  grassAt(gx: number, gz: number): number {
+    const m = this.grassMask;
+    if (!m) return 1;
+    const div = this.splatDiv;
+    const SW = this.SW;
+    const x = Math.min(SW - 1, Math.max(0, gx / div));
+    const z = Math.min(this.SH - 1, Math.max(0, gz / div));
+    const ix = Math.min(SW - 2, Math.floor(x));
+    const iz = Math.min(this.SH - 2, Math.floor(z));
+    const fx = x - ix;
+    const fz = z - iz;
+    const i = iz * SW + ix;
+    const v = (m[i] * (1 - fx) + m[i + 1] * fx) * (1 - fz) + (m[i + SW] * (1 - fx) + m[i + SW + 1] * fx) * fz;
+    return 1 - v / 255;
+  }
+
+  // ---------- Layer & Splatmap ----------
+
+  /** Gitterpunkte je Splat-Texel (große Landscapes: 2) */
+  get splatDiv(): number {
+    return Math.max(this.W, this.H) > 4096 ? 2 : 1;
+  }
+  get SW(): number {
+    return this.W / this.splatDiv + 1;
+  }
+  get SH(): number {
+    return this.H / this.splatDiv + 1;
+  }
+
+  /** Byte-Index von Kanal `ch` am Splat-Texel (sx, sz) */
+  splatIndex(ch: number, sx: number, sz: number): number {
+    return (((ch >> 2) * this.SH + sz) * this.SW + sx) * 4 + (ch & 3);
+  }
+
+  /** Splatmap anlegen, falls noch keine existiert (vor dem ersten Malen) */
+  ensureSplat(): Uint8Array {
+    if (!this.splat) {
+      this.splat = new Uint8Array(this.SW * this.SH * 8);
+      for (const fn of this.listeners) fn({ x: 0, y: 0, w: this.SW, h: this.SH * 2 }, 'splat');
+    }
+    return this.splat;
+  }
+
+  /** ganze Splatmap ersetzen (Import, Rückgängig) */
+  setSplat(splat: Uint8Array | null): void {
+    if (splat && splat.length !== this.SW * this.SH * 8) throw new Error('Splatmap passt nicht zur Landscape-Größe');
+    this.splat = splat;
+    this.revision++;
+    for (const fn of this.listeners) fn({ x: 0, y: 0, w: this.SW, h: this.SH * 2 }, 'splat');
+  }
+
+  setLayers(layers: LandscapeLayer[]): void {
+    this.layers = layers.slice(0, MAX_LAYERS);
+    this.revision++;
+    for (const fn of this.listeners) fn({ x: 0, y: 0, w: this.VW, h: this.VH }, 'layers');
+  }
+
+  /** Abstand (Gitterpunkte) für die Krümmungsmessung der Auto-Regeln: ca. 4 m */
+  curvStep(): number {
+    return Math.max(1, Math.round(4 / this.quadSize));
+  }
+
+  /** Neigung (Grad), Höhe, Krümmung (> 0 Kuppe) und Rauschen an einer Gitterkoordinate — wie im Shader */
+  autoInputs(gx: number, gz: number): { slope: number; height: number; curv: number; noise: number } {
+    const q = this.quadSize;
+    const e = 0.5;
+    const dx = (this.heightAtGrid(gx + e, gz) - this.heightAtGrid(gx - e, gz)) / (2 * e * q);
+    const dz = (this.heightAtGrid(gx, gz + e) - this.heightAtGrid(gx, gz - e)) / (2 * e * q);
+    const slope = (Math.acos(1 / Math.sqrt(dx * dx + dz * dz + 1)) * 180) / Math.PI;
+    const height = this.heightAtGrid(gx, gz);
+    const s = this.curvStep();
+    const avg = (this.heightAtGrid(gx + s, gz) + this.heightAtGrid(gx - s, gz) + this.heightAtGrid(gx, gz + s) + this.heightAtGrid(gx, gz - s)) / 4;
+    return { slope, height, curv: (height - avg) / (s * q), noise: autoNoise(gx * q, gz * q) };
+  }
+
+  /** Layer-Gewichte (Summe 1, Reihenfolge wie layers) an einer Gitterkoordinate */
+  layerWeights(gx: number, gz: number): number[] {
+    const L = this.layers;
+    const n = L.length;
+    const w = new Array<number>(n).fill(0);
+    if (!n) return w;
+    const inp = this.autoInputs(gx, gz);
+    let rem = 1;
+    for (let i = n - 1; i >= 1; i--) {
+      const c = autoCoverage(L[i].auto, inp.slope, inp.height, inp.curv, inp.noise);
+      w[i] = c * rem;
+      rem *= 1 - c;
+    }
+    w[0] = rem;
+    const sp = this.splat;
+    if (sp) {
+      const div = this.splatDiv;
+      const sx = Math.min(this.SW - 1, Math.max(0, Math.round(gx / div)));
+      const sz = Math.min(this.SH - 1, Math.max(0, Math.round(gz / div)));
+      let total = 0;
+      const p = L.map((l) => {
+        const v = sp[this.splatIndex(l.ch, sx, sz)] / 255;
+        total += v;
+        return v;
+      });
+      const keep = 1 - Math.min(1, total);
+      for (let i = 0; i < n; i++) w[i] = w[i] * keep + p[i];
+    }
+    return w;
+  }
+
+  /** Oberfläche des stärksten Layers an lokaler Position (m) */
+  surfaceAt(x: number, z: number): SurfaceId {
+    const w = this.layerWeights(this.toGridX(x), this.toGridZ(z));
+    let best = 0;
+    for (let i = 1; i < w.length; i++) if (w[i] > w[best]) best = i;
+    return this.layers[best]?.surface ?? 'erde';
   }
 
   onChange(fn: ChangeListener): () => void {
@@ -128,13 +368,17 @@ export class LandscapeData {
     return () => this.listeners.delete(fn);
   }
 
-  /** Nach Änderungen an heights/holes aufrufen (Rechteck in Gitterpunkten bzw. Loch-Zellen) */
-  changed(r: Rect, kind: 'height' | 'holes' = 'height'): void {
-    const c = this.clip(r, kind === 'height' ? this.VW : this.HW, kind === 'height' ? this.VH : this.HH);
+  /** Nach Änderungen an heights/holes/splat/grassMask aufrufen (Rechteck in Gitterpunkten, Loch-Zellen bzw. Splat-Texeln) */
+  changed(r: Rect, kind: 'height' | 'holes' | 'splat' | 'grass' = 'height'): void {
+    const c =
+      kind === 'height' ? this.clip(r) : kind === 'holes' ? this.clip(r, this.HW, this.HH) : kind === 'grass' ? this.clip(r, this.SW, this.SH) : this.clip(r, this.SW, this.SH * 2);
     if (!c) return;
     this.revision++;
-    if (kind === 'height') this.updateBounds(c);
-    else this.updateHoleCounts(c);
+    if (kind === 'height') {
+      if (this.base) this.recompose(c);
+      this.updateBounds(c);
+    }
+    else if (kind === 'holes') this.updateHoleCounts(c);
     for (const fn of this.listeners) fn(c, kind);
   }
 
@@ -281,18 +525,19 @@ export class LandscapeData {
     return n === 0 ? 0 : n === s * s ? 2 : 1;
   }
 
-  /** Höhe an einer Gitterkoordinate (gleiche Dreiecksteilung wie Render/Kollision) */
-  heightAtGrid(gx: number, gz: number): number {
+  /** Höhe an einer Gitterkoordinate (gleiche Dreiecksteilung wie Render/Kollision); `src` = anderes Höhenraster (base) */
+  heightAtGrid(gx: number, gz: number, src: Float32Array = this.heights): number {
     gx = Math.min(this.W, Math.max(0, gx));
     gz = Math.min(this.H, Math.max(0, gz));
     const ix = Math.min(this.W - 1, Math.floor(gx));
     const iz = Math.min(this.H - 1, Math.floor(gz));
     const fx = gx - ix;
     const fz = gz - iz;
-    const h00 = this.h(ix, iz);
-    const h10 = this.h(ix + 1, iz);
-    const h01 = this.h(ix, iz + 1);
-    const h11 = this.h(ix + 1, iz + 1);
+    const i = iz * this.VW + ix;
+    const h00 = src[i];
+    const h10 = src[i + 1];
+    const h01 = src[i + this.VW];
+    const h11 = src[i + this.VW + 1];
     // Bilinear (Render-Shader interpoliert ebenfalls bilinear)
     return (h00 * (1 - fx) + h10 * fx) * (1 - fz) + (h01 * (1 - fx) + h11 * fx) * fz;
   }
@@ -466,12 +711,12 @@ const MAGIC = 0x4c444843; // "CHDL"
  * Höhen als Blob: Kopf (Magic, Version, W, H, min, max) + 16-bit-Werte, auf den tatsächlichen Wertebereich
  * quantisiert (bei 100 m Höhenunterschied ≈ 1.5 mm Auflösung), danach deflate.
  */
-export function encodeHeights(d: LandscapeData): Uint8Array {
-  const n = d.heights.length;
+export function encodeHeights(d: LandscapeData, src: Float32Array = d.heights): Uint8Array {
+  const n = src.length;
   let mn = Infinity;
   let mx = -Infinity;
   for (let i = 0; i < n; i++) {
-    const v = d.heights[i];
+    const v = src[i];
     if (v < mn) mn = v;
     if (v > mx) mx = v;
   }
@@ -481,7 +726,7 @@ export function encodeHeights(d: LandscapeData): Uint8Array {
   // Delta zur linken Nachbarhöhe komprimiert deutlich besser (glattes Gelände)
   let prev = 0;
   for (let i = 0; i < n; i++) {
-    const v = Math.round((d.heights[i] - mn) * scale);
+    const v = Math.round((src[i] - mn) * scale);
     q[i] = (v - prev) & 0xffff;
     prev = v;
   }
@@ -534,6 +779,64 @@ export function decodeHoles(bytes: Uint8Array, W: number, H: number): { holes: U
   const raw = inflateSync(bytes);
   for (const sub of HOLE_SUBS) if (raw.length === W * sub * H * sub) return { holes: raw, sub };
   throw new Error('Lochdaten passen nicht zur Landscape-Größe');
+}
+
+const SPLAT_MAGIC = 0x544c5053; // "SPLT"
+
+/** Splatmap als Blob (Kopf: Magic, SW, SH; danach deflate); null = nichts gemalt */
+export function encodeSplat(d: LandscapeData): Uint8Array | null {
+  const s = d.splat;
+  if (!s) return null;
+  let any = false;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i]) {
+      any = true;
+      break;
+    }
+  }
+  if (!any) return null;
+  const body = deflateSync(s, { level: 6 });
+  const out = new Uint8Array(12 + body.length);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(0, SPLAT_MAGIC, true);
+  dv.setUint32(4, d.SW, true);
+  dv.setUint32(8, d.SH, true);
+  out.set(body, 12);
+  return out;
+}
+
+export function decodeSplat(bytes: Uint8Array, SW: number, SH: number): Uint8Array {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (dv.getUint32(0, true) !== SPLAT_MAGIC) throw new Error('Keine Splatmap-Daten');
+  if (dv.getUint32(4, true) !== SW || dv.getUint32(8, true) !== SH) throw new Error('Splatmap passt nicht zur Landscape-Größe');
+  const raw = inflateSync(bytes.subarray(12));
+  if (raw.length !== SW * SH * 8) throw new Error('Splatmap beschädigt');
+  return raw;
+}
+
+const GRASS_MAGIC = 0x4b534d47; // "GMSK"
+
+/** Gras-Maske als Blob (Kopf: Magic, SW, SH; danach deflate); null = nichts radiert */
+export function encodeGrassMask(d: LandscapeData): Uint8Array | null {
+  const m = d.grassMask;
+  if (!m || !m.some((v) => v !== 0)) return null;
+  const body = deflateSync(m, { level: 6 });
+  const out = new Uint8Array(12 + body.length);
+  const dv = new DataView(out.buffer);
+  dv.setUint32(0, GRASS_MAGIC, true);
+  dv.setUint32(4, d.SW, true);
+  dv.setUint32(8, d.SH, true);
+  out.set(body, 12);
+  return out;
+}
+
+export function decodeGrassMask(bytes: Uint8Array, SW: number, SH: number): Uint8Array {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (dv.getUint32(0, true) !== GRASS_MAGIC) throw new Error('Keine Gras-Maske');
+  if (dv.getUint32(4, true) !== SW || dv.getUint32(8, true) !== SH) throw new Error('Gras-Maske passt nicht zur Landscape-Größe');
+  const raw = inflateSync(bytes.subarray(12));
+  if (raw.length !== SW * SH) throw new Error('Gras-Maske beschädigt');
+  return raw;
 }
 
 /**

@@ -306,6 +306,15 @@ export function pickFile(accept: string): Promise<File | null> {
   });
 }
 
+/** mehrere Dateien wählen (leer = abgebrochen) */
+export function pickFiles(accept: string): Promise<File[]> {
+  return new Promise((resolve) => {
+    const input = h('input', { type: 'file', accept, multiple: '' });
+    input.addEventListener('change', () => resolve([...(input.files ?? [])]));
+    input.click();
+  });
+}
+
 /** Ziehbare Trennlinien zwischen Panels */
 export function initSplitters(): void {
   for (const s of document.querySelectorAll<HTMLElement>('.splitter')) {

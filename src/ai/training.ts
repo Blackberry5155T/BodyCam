@@ -3,7 +3,7 @@ import { Shooter, type ShotResult } from '../combat/shooting.ts';
 import type { PlayerController } from '../player/controller.ts';
 import type { HitZone, PlayerBody } from '../player/body.ts';
 import type { Settings } from '../core/settings.ts';
-import { RAPIER, WORLD_QUERY, type PhysicsWorld } from '../physics/physics.ts';
+import { RAPIER, SIGHT_QUERY, type PhysicsWorld } from '../physics/physics.ts';
 import type { LoadedMap } from '../world/mapLoader.ts';
 import { NavGrid } from './navGrid.ts';
 import { Npc, type NpcProfile, type NpcWorld, type Threat } from './npc.ts';
@@ -347,7 +347,7 @@ export class TrainingMode {
     if (d < 1e-4) return true;
     this.ray.origin = { x: a.x, y: a.y, z: a.z };
     this.ray.dir = { x: (b.x - a.x) / d, y: (b.y - a.y) / d, z: (b.z - a.z) / d };
-    return !this.o.physics.world.castRay(this.ray, d - 0.05, true, undefined, WORLD_QUERY);
+    return !this.o.physics.world.castRay(this.ray, d - 0.05, true, undefined, SIGHT_QUERY);
   }
 }
 

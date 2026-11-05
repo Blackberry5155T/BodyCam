@@ -22,6 +22,7 @@ export class LandscapeColliders {
     this.comps = new Array(data.compX * data.compZ).fill(null);
     this.revs = new Uint32Array(data.compX * data.compZ);
     this.off = data.onChange((r, kind) => {
+      if (kind === 'splat' || kind === 'layers') return;
       if (kind === 'holeRes') {
         for (let i = 0; i < this.revs.length; i++) this.revs[i]++;
         return;

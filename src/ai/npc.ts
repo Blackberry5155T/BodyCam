@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { CAMERA_DROP, CROUCH_EYE, PlayerController } from '../player/controller.ts';
 import { PlayerBody } from '../player/body.ts';
 import type { Action, Settings } from '../core/settings.ts';
-import { RAPIER, WORLD_QUERY, type PhysicsWorld } from '../physics/physics.ts';
+import { RAPIER, SIGHT_QUERY, WORLD_QUERY, type PhysicsWorld } from '../physics/physics.ts';
 import type { NavGrid } from './navGrid.ts';
 
 // Gegner-KI. Jeder NPC steuert einen echten PlayerController + PlayerBody über „gedrückte Tasten“
@@ -769,13 +769,13 @@ export class Npc {
 
   // ---------------------------------------------------------------- Strahlen
 
-  /** Freie Sichtlinie zwischen zwei Punkten (nur Welt-Geometrie) */
+  /** Freie Sichtlinie zwischen zwei Punkten (Welt-Geometrie + Sicht-Blocker wie Büsche/Baumkronen) */
   private clear(a: THREE.Vector3, b: THREE.Vector3): boolean {
-    return this.blockedAt(a, b) === null;
+    return this.blockedAt(a, b, SIGHT_QUERY) === null;
   }
 
   /** Entfernung zum ersten Hindernis zwischen a und b (null = frei) */
-  private blockedAt(a: THREE.Vector3, b: THREE.Vector3): number | null {
+  private blockedAt(a: THREE.Vector3, b: THREE.Vector3, query = WORLD_QUERY): number | null {
     const dx = b.x - a.x;
     const dy = b.y - a.y;
     const dz = b.z - a.z;
@@ -783,7 +783,7 @@ export class Npc {
     if (d < 1e-4) return null;
     this.ray.origin = { x: a.x, y: a.y, z: a.z };
     this.ray.dir = { x: dx / d, y: dy / d, z: dz / d };
-    const hit = this.physics.world.castRay(this.ray, d - 0.05, true, undefined, WORLD_QUERY);
+    const hit = this.physics.world.castRay(this.ray, d - 0.05, true, undefined, query);
     return hit ? hit.timeOfImpact : null;
   }
 }

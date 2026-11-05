@@ -761,6 +761,12 @@ select {
   width: 44px;
   height: 44px;
 }
+.tile .thumb .tex-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  min-height: 0;
+}
 .tile .bar {
   height: 3px;
 }
@@ -1430,6 +1436,80 @@ select {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--text-bright);
+}
+.ls-layers {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 4px;
+}
+.ls-layer {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 8px;
+  align-items: center;
+  padding: 3px 6px 3px 3px;
+  border-radius: 3px;
+  background: var(--bg-2);
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.ls-layer:hover {
+  background: var(--bg-3);
+}
+.ls-layer.on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.ls-layer-thumb {
+  grid-row: 1 / 3;
+  width: 34px;
+  height: 34px;
+  border-radius: 2px;
+  object-fit: cover;
+  background: var(--bg-4);
+}
+.ls-layer-name {
+  color: var(--text-bright);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ls-layer .dim {
+  color: var(--text-dim);
+}
+.ls-layer-sub {
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Foliage-Typenliste (nutzt .ls-layer) */
+.fol-type .fol-check {
+  grid-row: 1 / 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+}
+.fol-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  border-radius: 2px;
+  vertical-align: -1px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+}
+.fol-grass {
+  grid-template-columns: 34px 1fr auto;
+  cursor: default;
+}
+.fol-grass-reset {
+  grid-column: 3;
+  grid-row: 1 / 3;
 }
 .ls-buttons {
   display: flex;

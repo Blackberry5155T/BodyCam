@@ -39,6 +39,8 @@ export interface CylinderCollider {
   radius: number;
   minY: number;
   maxY: number;
+  /** blockiert nur die Sicht der KI (Büsche, Baumkronen) — nicht Spieler, Kugeln, Navigation */
+  sightOnly?: boolean;
 }
 
 /** Höhenfeld (Landscape-Komponente): Mitte, Zellen, Höhen spaltenweise wie Rapier (h[x · (rows+1) + z]) */

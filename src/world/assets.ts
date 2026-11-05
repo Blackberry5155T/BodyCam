@@ -7,6 +7,9 @@ import { loadModel } from './modelStore.ts';
 import { setupLightShadow } from './lightShadow.ts';
 import { SCALE, type Collider } from './collision.ts';
 import { LANDSCAPE_ASSET, LANDSCAPE_TYPE } from './landscape/asset.ts';
+import { FOLIAGE_ASSET, FOLIAGE_TYPE } from './foliage/asset.ts';
+import { SPLINE_ASSETS } from './splines/asset.ts';
+import { POWERPOLE_ASSET, POWERPOLE_TYPE } from './props/powerpole.ts';
 import { WEATHER_OPTIONS } from './weather.ts';
 import { ASPECTS, SCREEN_PX, STAGE_W, defaultScreen, drawStage, stageHeight, stageView } from './screen.ts';
 import type { BlobSource } from './blobStore.ts';
@@ -412,6 +415,9 @@ function meterBoxes(o: MapObjectData, ctx: AssetContext, boxes: { c: Vec3; s: Ve
 
 export const ASSETS: Record<string, AssetDef> = {
   [LANDSCAPE_TYPE]: LANDSCAPE_ASSET,
+  [FOLIAGE_TYPE]: FOLIAGE_ASSET,
+  ...SPLINE_ASSETS,
+  [POWERPOLE_TYPE]: POWERPOLE_ASSET,
   box: {
     label: 'Box',
     category: 'Geometrie',
@@ -1189,6 +1195,8 @@ export const PRESETS: AssetPreset[] = [
   { id: 'crate', label: 'Holzkiste 1 m', category: 'Props', type: 'box', icon: 'crate', props: { material: 'holz', color: '#ffffff' } },
   { id: 'pillar', label: 'Pfeiler (Beton)', category: 'Props', type: 'cylinder', icon: 'cylinder', scale: [1, 3, 1], props: { material: 'beton_dunkel', color: '#ffffff' } },
   { id: 'pole', label: 'Laternenmast', category: 'Props', type: 'cylinder', icon: 'pole', scale: [0.14, 3.4, 0.14], props: { material: 'metall', color: '#3a3d40', roughness: 0.45, metalness: 0.8 } },
+  { id: 'powerpole', label: 'Strommast', category: 'Props', type: 'powerpole', icon: 'pole' },
+  { id: 'telpole', label: 'Telefonmast', category: 'Props', type: 'powerpole', icon: 'pole', props: { height: 7, arms: 'none' } },
   { id: 'refchar', label: 'Referenz-Figur 1.8 m', category: 'Props', type: 'box', icon: 'person', scale: [0.7, 1.8, 0.7], props: { material: 'farbe', color: '#2f4a66' } },
 
   { id: 'pointlight', label: 'Punktlicht', category: 'Licht', type: 'pointlight', icon: 'bulb' },

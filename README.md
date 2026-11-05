@@ -35,7 +35,7 @@ Schnee (füllen sich bei Schneefall langsam wieder) und Wellenringe in Pfützen.
 - **Testen:** *Simulieren* (Alt+S) führt Scripts im Editor aus: Kamera = Spieler, Klick = Benutzen, Shift+Klick = Treffer.
   *Spielen* (Alt+P) speichert und öffnet die Map im Spiel (`/?map=local:<Name>`). Erneutes Speichern lädt den Spiel-Tab neu.
 - **Modi:** Knopf links in der Toolbar bzw. Umschalt+1…6 — Auswahl, Landscape, Foliage, Modeling, Splines, Wasser
-  (Plan: `docs/Editor-Erweiterung-Plan.md`; Auswahl und Landscape sind fertig, die übrigen Modi zeigen vorerst nur, was geplant ist).
+  (Plan: `docs/Editor-Erweiterung-Plan.md`; Auswahl, Landscape, Foliage und Splines sind fertig, die übrigen Modi zeigen vorerst nur, was geplant ist).
 - **Landscape** (Modus Umschalt+2, wie UE5): *Neue Landscape…* (Komponenten à 128 Quads, Quad-Größe, optional aus Heightmap)
   oder *Aus Heightmap…* (16-bit PNG oder RAW `.r16`; Min/Max-Höhe im Dialog). Werkzeuge 1–8: Formen (Umschalt = senken),
   Glätten, Abflachen, Rampe (zwei Klicks, Enter), Noise, Erosion (hydraulisch/thermisch; als Pinsel oder im Hintergrund auf
@@ -44,6 +44,46 @@ Schnee (füllen sich bei Schneefall langsam wieder) und Wellenringe in Pfützen.
   Landscape-Größe begrenzt, rückgängig machbar), Region (Rechteck ziehen → Kopieren/Einfügen, Spiegeln, Drehen 90°,
   *An Mesh anpassen* für die ausgewählten Objekte). `[`/`]` oder Strg+Mausrad = Pinselgröße (ab 0,1 m),
   Strg+Umschalt+Mausrad = Stärke (0 … 2).
+  **Material** (Werkzeug 9 *Malen*): bis zu 8 Layer je Landscape (Textur, Kachelgröße, Farbton, Rauheit, Normalen-Stärke,
+  Oberfläche). Gemaltes ersetzt die Auto-Regeln (Neigung/Höhe/Noise je Layer, z. B. Fels ab 36°); Umschalt = radieren,
+  Modus *Auf Auto zurücksetzen*. Gewichtsmasken als ZIP mit einer Graustufen-PNG je Layer exportieren/importieren
+  (Dateiname = Layer-Name, z. B. aus World Machine/Gaea). Der Shader mischt nach Höhe, kachelt ohne sichtbare
+  Wiederholung (Hex-Tiling + Makro-Variation), nimmt an Steilhängen Triplanar-Projektion und bekommt Nässe/Pfützen/Schnee
+  vom Wetter. Die Oberfläche je Layer bestimmt Schrittgeräusche und Einschlag-Effekte im Spiel (nasse Erde → Schlamm,
+  Schneedecke → Schnee). Textur-Qualität (512/1024 px, 2–3 Layer je Pixel) folgt Grafik › *Terrain-Detail*.
+- **Foliage** (Modus Umschalt+3): Typen anlegen über *Neu* (Platzhalter Laubbaum, Nadelbaum, Busch, Fels, Grasbüschel
+  oder ein glb-Modell; LOD-Stufen über Knotennamen `LOD0/LOD1/LOD2`, Impostor wird automatisch gebacken). Je Typ:
+  Dichte je 100 m², Skalierung min/max, zufällige Drehung, Ausrichtung zur Fläche (0–100 %), Neigungs-/Höhenbereich,
+  Mindestabstand, Einsinken, LOD-/Impostor-/Sichtweite, Schatten, Kollision (keine/Stamm/voll), Sichtschutz (KI),
+  Wind, Oberfläche (Treffer-Effekt). Werkzeuge 1–5: Malen (Umschalt = radieren), Radieren (nur aktive Typen oder alle),
+  Auswählen (Klick, Umschalt = hinzufügen, Ziehen = Pinsel, Entf = löschen), Neu anwenden (Höhe, Ausrichtung,
+  Skalierung, Filter nachträglich), Füllen (alle Landscapes, läuft im Hintergrund, ein Undo-Schritt). Die Checkbox
+  in der Typenliste bestimmt, was gemalt/gefüllt wird. Optional *Auf Meshes malen* je Typ. Das Foliage-Objekt wird
+  beim ersten Typ angelegt; die Instanzen liegen als Blob in der Map (64-m-Zellen).
+  **Layer-Gras:** im Landscape-Layer *Gras* (Wiese, kurz, hoch, trocken) und *Gras-Dichte* wählen — dann wächst Gras
+  nach Layer-Gewicht um die Kamera, bewegt sich im Wind des Wetters und weicht Spieler/NPCs aus. Im Foliage-Modus
+  lässt sich das Gras mit dem Pinsel radieren (Radieren oder Umschalt+Malen) und mit Malen wiederherstellen; der
+  Eintrag *Layer-Gras* in der Typenliste schaltet das an/aus, *Zurücksetzen* stellt alles wieder her. Die Gras-Maske
+  wird mit der Landscape gespeichert.
+  Grafik-Menü: *Foliage-Dichte*, *Foliage-Weite*, *Gras* an/aus.
+- **Splines** (Modus Umschalt+5): oben eine Vorlage wählen (Straße, Feldweg, Leitplanke, Zaun, Mauer, Modell,
+  Stromkabel, Rohr), dann Punkte in den Viewport klicken (sie folgen dem Gelände); Enter oder Esc beendet.
+  Bearbeiten: Spline anklicken, Punkt ziehen (Umschalt + Ziehen = Höhe), Klick auf die Kurve fügt einen Punkt ein,
+  Strg + Klick hängt einen an, Entf löscht den gewählten Punkt. Im Panel: Position, Breite und Querneigung je Punkt,
+  *Umkehren*, *Aufs Gelände*, dazu die Einstellungen des Typs.
+  **Straße/Feldweg:** Breite, Belag (Asphalt, Kies, Erde, Sand, Schlamm), Mittel-/Randlinien, Bordsteine, Kollision.
+  *Gelände anpassen* zieht die Landscape unter der Straße auf Straßenhöhe (mit *Böschung* zur Seite); das passiert
+  nicht-destruktiv: Straße verschieben oder löschen stellt das Gelände wieder her, die Sculpt-Pinsel arbeiten darunter
+  weiter. Layer-Gras wächst nicht auf der Straße, Schritte klingen nach dem Belag.
+  **Spline-Mesh:** Leitplanke, Maschendrahtzaun, Mauer oder ein eigenes glb-Modell, das entlang der Kurve verbogen
+  wird; seitlicher Versatz, Höhe, Pfostenabstand, Kollision.
+  **Kabel/Rohr:** Kabel hängen zwischen den Punkten durch (*Durchhang* in % der Spannweite), Rohre folgen der Kurve.
+  Neues Asset *Props › Strommast* (auch als Telefonmast): einen Kabel-Punkt auf den Mast klicken, dann rastet er am
+  Isolator ein und wandert mit, wenn der Mast verschoben oder gedreht wird (*Lösen* im Panel hebt das auf).
+- **Texturen** (Content Browser › Texturen): prozedurale Sets, Projekt-Sets aus `public/assets/textures/<Name>/` und im
+  Browser importierte Sets. Dateien werden am Namen erkannt (Poly Haven, ambientCG, Quixel: `albedo`/`basecolor`/`diff`,
+  `normal`/`nor_gl` (DirectX-Normalen `_dx` werden umgerechnet), `rough`, `ao`, `height`/`disp`, `arm`).
+  Doppelklick weist ein Set dem gewählten Layer zu.
   Export als PNG 16-bit oder `.r16` (Min/Max stehen im Dateinamen). Im Spiel: begehbar und beschießbar (Rapier-Heightfield);
   LOD-Abstand über Grafik › *Terrain-Detail*. Beim Anlegen wird die *Sichtweite* (World Settings) passend erhöht.
 - **Speichern:** Maps liegen im Browser (IndexedDB, Map-Format v2; Maps aus der alten localStorage-Ablage werden beim
@@ -60,7 +100,7 @@ Schnee (füllen sich bei Schneefall langsam wieder) und Wellenringe in Pfützen.
 docs/                     Design-Dokument, Entwicklungsplan
 public/assets/            Statische Dateien, werden unverändert ausgeliefert (/assets/...)
   models/                 3D-Modelle (.glb), erscheinen automatisch im Content Browser (Modelle › Projekt)
-  textures/               Bild-Texturen (Albedo/Normal/Roughness)
+  textures/               Textur-Sets für Landscape-Layer: je Set ein Ordner (Albedo, Normal, Roughness, AO, Height)
   audio/                  Sounds, Musik
 editor.html               Map-Editor
 src/
@@ -88,7 +128,11 @@ src/
     builder.ts            Älterer MapBuilder für Code-Maps (derzeit ungenutzt)
     props/                Interaktive Objekte (terminal.ts = Menü-Bildschirm)
     landscape/            Landscape: Daten (Höhen, Löcher, Min/Max), CDLOD-Renderer, Pinsel, Erosion (+ Worker),
-                          Heightmap-Import/-Export (PNG 16-bit, .r16), Kollision (Heightfields), Asset-Typ
+                          Heightmap-Import/-Export (PNG 16-bit, .r16), Kollision (Heightfields), Asset-Typ,
+                          Material-Layer (layers.ts), Malen + Gewichtsmasken (paint.ts), Textur-Bibliothek (textures.ts)
+    foliage/              Foliage: Typen + Platzhalter (types.ts), Instanzen in 64-m-Zellen (data.ts), Meshes/LOD/
+                          Impostor-Backen (meshes.ts), Instanz-Renderer + Kollision (render.ts), Layer-Gras (grass.ts)
+    surfaces.ts           Oberflächen-Typen (Gras, Erde, Fels …): Schritt-Klang, Einschlag, Nässe-Verhalten
   scripting/
     blocks.ts             Block-Definitionen + Code-Generator (nur Editor)
     runtime.ts            Führt Objekt-Scripts aus (Spiel + Simulieren im Editor)
@@ -100,7 +144,8 @@ src/
   player/
     controller.ts         Bewegung, Kollision (Rapier-Charakter-Controller), Kamera (Wippen, Rückstoß, Autopilot)
     body.ts               Würfel-Körper mit Gelenk-Rig + prozeduralen Animationen
-  combat/                 Schießen, Treffer, Effekte
+  combat/                 Schießen, Treffer, Effekte (Einschläge je Oberfläche)
+  audio/                  Synthetische Sounds (WebAudio): Schritte je Oberfläche
   textures/               Prozedurale Texturen (Canvas-generiert)
   rendering/postfx/       Post-Processing-Shader (Bodycam-Linse)
   ui/                     Canvas-UI-Toolkit für In-World-Bildschirme

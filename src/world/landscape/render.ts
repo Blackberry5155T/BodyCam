@@ -1,5 +1,8 @@
 import * as THREE from 'three';
 import { BLOCK, type ChangeKind, type LandscapeData, type Rect } from './data.ts';
+import { MAX_LAYERS } from './layers.ts';
+import { loadTextureSet, onTexturesInvalidated, type TexSetData } from './textures.ts';
+import { surfaceDef, type SurfaceId } from '../surfaces.ts';
 
 // CDLOD-Rendering (Continuous Distance-Dependent Level of Detail, Strugar 2009):
 // Ein einziges 32×32-Gitter wird pro Quadtree-Knoten instanziert; der Vertex-Shader liest die Höhe aus einer
@@ -10,11 +13,29 @@ import { BLOCK, type ChangeKind, type LandscapeData, type Rect } from './data.ts
 const G = BLOCK;
 const MAX_LEVELS = 16;
 
-export interface LandscapeLook {
-  grass: string;
-  rock: string;
-  /** Hangneigung (Grad), ab der Fels erscheint */
-  slope: number;
+/** Texturgröße und Anzahl gleichzeitig gemischter Layer je Pixel, gekoppelt an "Terrain-Detail" */
+function quality(detail: number): { size: number; k: number } {
+  if (detail < 1.75) return { size: 512, k: 2 };
+  if (detail < 2.25) return { size: 1024, k: 2 };
+  return { size: 1024, k: 3 };
+}
+
+function makeArray(size: number, ch: number, fill: number[], srgb: boolean): THREE.DataArrayTexture {
+  const n = size * size * MAX_LAYERS;
+  const data = new Uint8Array(n * ch);
+  for (let i = 0; i < n; i++) for (let c = 0; c < ch; c++) data[i * ch + c] = fill[c];
+  const t = new THREE.DataArrayTexture(data, size, size, MAX_LAYERS);
+  t.format = ch === 2 ? THREE.RGFormat : THREE.RGBAFormat;
+  t.type = THREE.UnsignedByteType;
+  t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  t.generateMipmaps = true;
+  t.anisotropy = 8;
+  t.unpackAlignment = 1;
+  t.needsUpdate = true;
+  return t;
 }
 
 /** Editor-Overlays, im Terrain-Shader gezeichnet (folgen exakt der Oberfläche) */
@@ -125,18 +146,300 @@ void lsClip() {
 }
 `;
 
-const COLOR_FRAG = /* glsl */ `
-uniform vec3 uGrass;
-uniform vec3 uRock;
-uniform float uSlope;
+// Landscape-Material: bis zu 8 Layer, Gewichte = gemalte Splatmap + Auto-Regeln (Neigung, Höhe, Krümmung, Rauschen).
+// Je Pixel werden nur die LS_K stärksten Layer abgetastet und über ihre Texturhöhe gemischt (Höhen-Blending).
+// Draufsicht: Hex-Tiling (Mikkelsen 2022) gegen sichtbare Kachelung, in der Ferne ein zweiter, gröberer Abgriff;
+// steile Flächen: Triplanar-Projektion mit Whiteout-Normalen (Golus). Gleiche Auto-Formeln wie layers.ts.
+const LAYER_FRAG = /* glsl */ `
+uniform sampler2D uHeight;
+uniform sampler2D uSplat;
+uniform vec4 uSplatInfo; // SW, SH, div, an
+uniform sampler2DArray uAlb;
+uniform sampler2DArray uNrm;
+uniform sampler2DArray uArm;
+uniform vec4 uLay[8];     // 1/Kachel, Ebene, Rauheit, Normalenstärke
+uniform vec4 uLayTint[8]; // Farbton (linear), Splat-Kanal
+uniform vec4 uAutoA[8];   // Neigung min/max, Höhe min/max
+uniform vec4 uAutoB[8];   // an, Krümmung, weich, Rauschen
+uniform vec4 uLaySurf[8]; // Porosität, Pfützen-Neigung
+uniform int uLayerN;
+uniform float uCurvStep;
 
-float lsHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-float lsNoise(vec2 p) {
-  vec2 i = floor(p);
-  vec2 f = fract(p);
-  f = f * f * (3.0 - 2.0 * f);
-  return mix(mix(lsHash(i), lsHash(i + vec2(1, 0)), f.x), mix(lsHash(i + vec2(0, 1)), lsHash(i + vec2(1, 1)), f.x), f.y);
+float lsRough = 0.9;
+float lsAO = 1.0;
+vec3 lsDN = vec3(0.0, 1.0, 0.0);
+float lsPor = 1.0;
+float lsPudBias = 0.0;
+float lsWt[8];
+
+float lsHeightF(vec2 g) {
+  g = clamp(g, vec2(0.0), uGridSize);
+  vec2 i = min(floor(g), uGridSize - 1.0);
+  vec2 f = g - i;
+  ivec2 p = ivec2(i);
+  float h00 = texelFetch(uHeight, p, 0).r;
+  float h10 = texelFetch(uHeight, p + ivec2(1, 0), 0).r;
+  float h01 = texelFetch(uHeight, p + ivec2(0, 1), 0).r;
+  float h11 = texelFetch(uHeight, p + ivec2(1, 1), 0).r;
+  return mix(mix(h00, h10, f.x), mix(h01, h11, f.x), f.y);
 }
+
+float lsHashU(ivec2 p) {
+  uint h = uint(p.x) * 1597334677u ^ uint(p.y) * 3812015801u;
+  h = (h ^ (h >> 16u)) * 0x7feb352du;
+  h ^= h >> 15u;
+  h *= 0x846ca68bu;
+  h ^= h >> 16u;
+  return float(h) / 4294967296.0;
+}
+float lsVNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = p - i;
+  f = f * f * (3.0 - 2.0 * f);
+  ivec2 q = ivec2(i);
+  return mix(mix(lsHashU(q), lsHashU(q + ivec2(1, 0)), f.x), mix(lsHashU(q + ivec2(0, 1)), lsHashU(q + ivec2(1, 1)), f.x), f.y);
+}
+float lsAutoNoise(vec2 p) {
+  return lsVNoise(p / 7.0) * 0.65 + lsVNoise(p / 2.3 + vec2(17.0, 5.0)) * 0.35;
+}
+
+float lsAuto(int i, float slope, float hgt, float curv, float nz) {
+  vec4 A = uAutoA[i];
+  vec4 B = uAutoB[i];
+  if (B.x < 0.5) return 0.0;
+  float n = (nz - 0.5) * B.w;
+  float s = slope + n * 30.0;
+  float h = hgt + n * 25.0;
+  float ss = 1.0 + B.z * 14.0;
+  float hs = 0.5 + B.z * 20.0;
+  float c = 1.0;
+  if (A.x > 0.5) c *= smoothstep(A.x - ss, A.x + ss, s);
+  if (A.y < 89.5) c *= 1.0 - smoothstep(A.y - ss, A.y + ss, s);
+  if (A.z > -9999.0) c *= smoothstep(A.z - hs, A.z + hs, h);
+  if (A.w < 9999.0) c *= 1.0 - smoothstep(A.w - hs, A.w + hs, h);
+  if (B.y != 0.0) {
+    float k = clamp(curv * 6.0, -1.0, 1.0) * sign(B.y) + n * 0.6;
+    c *= 1.0 + (smoothstep(-0.15, 0.35, k) - 1.0) * abs(B.y);
+  }
+  return c;
+}
+
+mat2 lsRot(float a) {
+  float c = cos(a);
+  float s = sin(a);
+  return mat2(c, s, -s, c);
+}
+
+vec3 lsTN(vec2 rg, float str) {
+  vec3 t = vec3(rg * 2.0 - 1.0, 0.0);
+  t.z = sqrt(max(0.0, 1.0 - dot(t.xy, t.xy)));
+  t.xy *= str;
+  return normalize(t);
+}
+
+// ein Abgriff (gedreht um R); Normale zurück in die Projektionsebene gedreht
+void lsTap(float sl, vec2 st, vec2 gx, vec2 gy, mat2 R, float str, out vec3 alb, out vec3 arm, out vec3 tn) {
+  vec3 c = vec3(R * st, sl);
+  vec2 dx = R * gx;
+  vec2 dy = R * gy;
+  alb = textureGrad(uAlb, c, dx, dy).rgb;
+  arm = textureGrad(uArm, c, dx, dy).rgb;
+  tn = lsTN(textureGrad(uNrm, c, dx, dy).rg, str);
+  tn.xy = transpose(R) * tn.xy;
+}
+
+// Hex-Tiling: drei zufällig gedrehte/verschobene Kacheln je Dreieck, gewichtet nach Nähe und Texturhöhe
+void lsHex(float sl, vec2 st, vec2 gx, vec2 gy, float str, out vec3 alb, out vec3 arm, out vec3 tn) {
+  vec2 hs = st * 1.6;
+  vec2 sk = vec2(hs.x, -0.57735027 * hs.x + 1.15470054 * hs.y);
+  vec2 bf = floor(sk);
+  ivec2 base = ivec2(bf);
+  vec3 t = vec3(sk - bf, 0.0);
+  t.z = 1.0 - t.x - t.y;
+  float s = step(0.0, -t.z);
+  float s2 = 2.0 * s - 1.0;
+  vec3 w = max(vec3(-t.z * s2, s - t.y * s2, s - t.x * s2), 0.0);
+  int si = int(s);
+  ivec2 v[3];
+  v[0] = base + ivec2(si, si);
+  v[1] = base + ivec2(si, 1 - si);
+  v[2] = base + ivec2(1 - si, si);
+  alb = vec3(0.0);
+  arm = vec3(0.0);
+  tn = vec3(0.0);
+  float ws = 0.0;
+  for (int j = 0; j < 3; j++) {
+    mat2 R = lsRot(lsHashU(v[j]) * 6.2831853);
+    vec2 off = vec2(lsHashU(v[j] + ivec2(113, 47)), lsHashU(v[j] + ivec2(29, 211)));
+    vec3 a, m, n;
+    lsTap(sl, st + transpose(R) * off, gx, gy, R, str, a, m, n);
+    float W = pow(w[j], 7.0) * (0.15 + m.b);
+    alb += a * W;
+    arm += m * W;
+    tn += n * W;
+    ws += W;
+  }
+  ws = max(ws, 1e-6);
+  alb /= ws;
+  arm /= ws;
+  tn = normalize(tn);
+}
+
+// Draufsicht: nah Hex-Tiling, fern zwei Abgriffe in verschiedenen Maßstäben (bricht große Wiederholungen)
+void lsTop(float sl, vec2 st, vec2 gx, vec2 gy, float str, float farK, out vec3 alb, out vec3 arm, out vec3 tn) {
+  alb = vec3(0.0);
+  arm = vec3(0.0);
+  tn = vec3(0.0, 0.0, 1.0);
+  if (farK < 0.999) lsHex(sl, st, gx, gy, str, alb, arm, tn);
+  if (farK > 0.001) {
+    vec3 a1, m1, n1, a2, m2, n2;
+    lsTap(sl, st, gx, gy, mat2(0.8, 0.6, -0.6, 0.8), str, a1, m1, n1);
+    lsTap(sl, st * 0.23, gx * 0.23, gy * 0.23, mat2(-0.28, 0.96, -0.96, -0.28), str, a2, m2, n2);
+    alb = mix(alb, (a1 + a2) * 0.5, farK);
+    arm = mix(arm, (m1 + m2) * 0.5, farK);
+    tn = normalize(mix(tn, normalize(n1 + n2), farK));
+  }
+}
+
+// ein Layer, alle Projektionen; Ergebnis: Albedo, ARM, Weltnormale
+void lsLayer(int i, vec3 p, vec3 dpx, vec3 dpy, vec3 bw, vec3 gN, float farK, out vec3 alb, out vec3 arm, out vec3 nW) {
+  vec4 L = uLay[i];
+  float sl = L.y;
+  float it = L.x;
+  float str = L.w;
+  vec3 aX = vec3(0.0), mX = vec3(0.0), nX = vec3(0.0, 0.0, 1.0);
+  vec3 aY = vec3(0.0), mY = vec3(0.0), nY = vec3(0.0, 0.0, 1.0);
+  vec3 aZ = vec3(0.0), mZ = vec3(0.0), nZ = vec3(0.0, 0.0, 1.0);
+  mat2 I = mat2(1.0);
+  if (bw.y > 0.0) lsTop(sl, p.xz * it, dpx.xz * it, dpy.xz * it, str, farK, aY, mY, nY);
+  if (bw.x > 0.0) lsTap(sl, p.zy * it, dpx.zy * it, dpy.zy * it, I, str, aX, mX, nX);
+  if (bw.z > 0.0) lsTap(sl, p.xy * it, dpx.xy * it, dpy.xy * it, I, str, aZ, mZ, nZ);
+  alb = aX * bw.x + aY * bw.y + aZ * bw.z;
+  arm = mX * bw.x + mY * bw.y + mZ * bw.z;
+  vec3 wx = vec3(nX.xy + gN.zy, abs(nX.z) * gN.x);
+  vec3 wy = vec3(nY.xy + gN.xz, abs(nY.z) * gN.y);
+  vec3 wz = vec3(nZ.xy + gN.xy, abs(nZ.z) * gN.z);
+  nW = normalize(wx.zyx * bw.x + wy.xzy * bw.y + wz * bw.z);
+}
+`;
+
+const LAYER_APPLY = /* glsl */ `
+  {
+    vec2 lp = (vGrid - uGridSize * 0.5) * uQuad;
+    float hc = lsHeightF(vGrid);
+    vec3 p = vec3(lp.x, hc, lp.y);
+    vec3 dpx = dFdx(p);
+    vec3 dpy = dFdy(p);
+    vec2 wp = vGrid * uQuad;
+
+    // Auto-Regeln: von oben nach unten, jeder Layer deckt einen Teil des Rests ab; Basis bekommt, was übrig bleibt
+    float slope = degrees(acos(clamp(lsN.y, 0.0, 1.0)));
+    float cs = uCurvStep;
+    float avg = 0.25 * (lsHeightF(vGrid + vec2(cs, 0.0)) + lsHeightF(vGrid - vec2(cs, 0.0)) + lsHeightF(vGrid + vec2(0.0, cs)) + lsHeightF(vGrid - vec2(0.0, cs)));
+    float curv = (hc - avg) / (cs * uQuad);
+    float nz = lsAutoNoise(wp);
+    float rem = 1.0;
+    for (int i = 7; i >= 1; i--) {
+      lsWt[i] = 0.0;
+      if (i < uLayerN) {
+        float c = lsAuto(i, slope, hc, curv, nz);
+        lsWt[i] = c * rem;
+        rem *= 1.0 - c;
+      }
+    }
+    lsWt[0] = rem;
+    // Gemaltes ersetzt die Auto-Verteilung anteilig
+    if (uSplatInfo.w > 0.5) {
+      vec2 suv = (vGrid / uSplatInfo.z + 0.5) / vec2(uSplatInfo.x, 2.0 * uSplatInfo.y);
+      vec4 s0 = texture2D(uSplat, suv);
+      vec4 s1 = texture2D(uSplat, suv + vec2(0.0, 0.5));
+      float pw[8];
+      float tot = 0.0;
+      for (int i = 0; i < 8; i++) {
+        pw[i] = 0.0;
+        if (i < uLayerN) {
+          int ch = int(uLayTint[i].w + 0.5);
+          pw[i] = ch < 4 ? s0[ch] : s1[ch - 4];
+          tot += pw[i];
+        }
+      }
+      float keep = 1.0 - min(tot, 1.0);
+      for (int i = 0; i < 8; i++) lsWt[i] = lsWt[i] * keep + pw[i];
+    }
+
+    // die LS_K stärksten Layer
+    int ki[LS_K];
+    float kw[LS_K];
+    for (int k = 0; k < LS_K; k++) {
+      int bi = 0;
+      float bv = -1.0;
+      for (int i = 0; i < 8; i++) {
+        if (i < uLayerN && lsWt[i] > bv) {
+          bv = lsWt[i];
+          bi = i;
+        }
+      }
+      ki[k] = bi;
+      kw[k] = bv;
+      lsWt[bi] = -2.0;
+    }
+
+    vec3 bw = pow(abs(lsN), vec3(8.0));
+    bw /= dot(bw, vec3(1.0));
+    bw = max(bw - 0.03, 0.0);
+    bw /= dot(bw, vec3(1.0));
+    float dist = length(vViewPosition);
+
+    vec3 hA[LS_K];
+    vec3 hM[LS_K];
+    vec3 hN[LS_K];
+    float hb[LS_K];
+    float ma = -10.0;
+    for (int k = 0; k < LS_K; k++) {
+      hA[k] = vec3(0.5);
+      hM[k] = vec3(0.9, 1.0, 0.5);
+      hN[k] = lsN;
+      hb[k] = -10.0;
+      if (kw[k] > 0.004) {
+        int i = ki[k];
+        float farK = smoothstep(12.0, 45.0, dist * uLay[i].x);
+        lsLayer(i, p, dpx, dpy, bw, lsN, farK, hA[k], hM[k], hN[k]);
+        hb[k] = kw[k] + hM[k].b * 0.5;
+        ma = max(ma, hb[k]);
+      }
+    }
+    // Höhen-Blending: am Übergang setzt sich der Layer mit der höheren Texturhöhe durch (Steine aus dem Gras)
+    ma -= 0.12;
+    vec3 alb = vec3(0.0);
+    vec3 arm = vec3(0.0);
+    vec3 nn = vec3(0.0);
+    float por = 0.0;
+    float pud = 0.0;
+    float bs = 0.0;
+    for (int k = 0; k < LS_K; k++) {
+      float b = max(hb[k] - ma, 0.0);
+      int i = ki[k];
+      alb += hA[k] * uLayTint[i].rgb * b;
+      arm += vec3(hM[k].r * uLay[i].z, hM[k].g, hM[k].b) * b;
+      nn += hN[k] * b;
+      por += uLaySurf[i].x * b;
+      pud += uLaySurf[i].y * b;
+      bs += b;
+    }
+    bs = max(bs, 1e-5);
+    alb /= bs;
+    arm /= bs;
+    // großflächige Helligkeits-Variation (aus 1 km Entfernung sichtbar, bricht Gleichförmigkeit)
+    float macro = lsVNoise(wp / 61.0) * 0.55 + lsVNoise(wp / 13.0) * 0.45;
+    alb *= 0.84 + 0.32 * macro;
+    diffuseColor.rgb *= alb;
+    lsRough = clamp(arm.r, 0.04, 1.0);
+    lsAO = arm.g;
+    lsDN = normalize(nn);
+    lsPor = por / bs;
+    // Pfützen: Senken der Textur und Mulden im Gelände zuerst, Kuppen kaum
+    lsPudBias = (arm.b - 0.5) * 0.2 - (pud / bs) * 0.2 + clamp(curv * 3.0, -0.15, 0.15);
+  }
 `;
 
 const OVERLAY_FRAG = /* glsl */ `
@@ -229,6 +532,33 @@ export function updateLandscapes(camera: THREE.Camera): void {
   for (const r of live) r.update(camera);
 }
 
+/** alle Landscapes in der Szene (Layer-Gras) */
+export function liveLandscapes(): Iterable<LandscapeRenderer> {
+  return live;
+}
+
+const _sInv = new THREE.Matrix4();
+const _sP = new THREE.Vector3();
+
+/** Oberfläche des Landscapes unter einem Welt-Punkt (höchstens `maxDy` m darüber/darunter), sonst null */
+export function surfaceAtWorld(p: THREE.Vector3, maxDy = 0.35): SurfaceId | null {
+  for (const r of live) {
+    if (!r.mesh.visible) continue;
+    _sP.copy(p).applyMatrix4(_sInv.copy(r.mesh.matrixWorld).invert());
+    const h = r.data.heightAt(_sP.x, _sP.z);
+    if (h !== null && Math.abs(_sP.y - h) <= maxDy) return r.data.surfaceAt(_sP.x, _sP.z);
+  }
+  return null;
+}
+
+/** Oberfläche an einem Treffer (Raycast) auf einem Landscape-Mesh, sonst null */
+export function landscapeSurfaceOf(o: THREE.Object3D, p: THREE.Vector3): SurfaceId | null {
+  const r = o.userData.landscape as LandscapeRenderer | undefined;
+  if (!r) return null;
+  _sP.copy(p).applyMatrix4(_sInv.copy(r.mesh.matrixWorld).invert());
+  return r.data.surfaceAt(_sP.x, _sP.z);
+}
+
 export class LandscapeRenderer {
   readonly mesh: THREE.Mesh<THREE.InstancedBufferGeometry, THREE.MeshStandardMaterial>;
   readonly heightTex: THREE.DataTexture;
@@ -242,15 +572,24 @@ export class LandscapeRenderer {
   private ranges: number[] = [];
   private frustum = new THREE.Frustum();
   private offData: () => void;
+  private albTex!: THREE.DataArrayTexture;
+  private nrmTex!: THREE.DataArrayTexture;
+  private armTex!: THREE.DataArrayTexture;
+  /** erster Komplett-Upload der Arrays erfolgt (danach Ebenen einzeln) */
+  private arraysUploaded = false;
+  private texSize = 0;
+  private texK = 0;
+  /** geladene Textur je Array-Ebene (Promise aus dem Textur-Cache; neues Promise = neu laden) */
+  private slice: (Promise<TexSetData> | undefined)[] = [];
+  private offTex: () => void;
+  private splatTex: THREE.DataTexture;
+  private disposed = false;
   /** Sichtweite-Faktor (Grafik-Einstellung "Terrain-Detail") */
   static detail = 2.5;
   /** Anzahl gezeichneter Knoten im letzten Frame (Statistik) */
   drawn = 0;
 
-  constructor(
-    readonly data: LandscapeData,
-    look: LandscapeLook,
-  ) {
+  constructor(readonly data: LandscapeData) {
     const d = data;
     this.heightTex = new THREE.DataTexture(d.heights, d.VW, d.VH, THREE.RedFormat, THREE.FloatType);
     this.heightTex.minFilter = this.heightTex.magFilter = THREE.NearestFilter;
@@ -277,9 +616,18 @@ export class LandscapeRenderer {
       uCamLocal: { value: new THREE.Vector3() },
       uMorphStart: { value: new Array<number>(MAX_LEVELS).fill(1e9) },
       uMorphEnd: { value: new Array<number>(MAX_LEVELS).fill(2e9) },
-      uGrass: { value: new THREE.Color() },
-      uRock: { value: new THREE.Color() },
-      uSlope: { value: 35 },
+      uSplat: { value: null },
+      uSplatInfo: { value: new THREE.Vector4(1, 1, 1, 0) },
+      uAlb: { value: null },
+      uNrm: { value: null },
+      uArm: { value: null },
+      uLay: { value: Array.from({ length: MAX_LAYERS }, () => new THREE.Vector4()) },
+      uLayTint: { value: Array.from({ length: MAX_LAYERS }, () => new THREE.Vector4()) },
+      uAutoA: { value: Array.from({ length: MAX_LAYERS }, () => new THREE.Vector4()) },
+      uAutoB: { value: Array.from({ length: MAX_LAYERS }, () => new THREE.Vector4()) },
+      uLaySurf: { value: Array.from({ length: MAX_LAYERS }, () => new THREE.Vector4()) },
+      uLayerN: { value: 0 },
+      uCurvStep: { value: d.curvStep() },
       uBrush: { value: new THREE.Vector4() },
       uBrushColor: { value: new THREE.Color() },
       uRegion: { value: new THREE.Vector4() },
@@ -288,7 +636,11 @@ export class LandscapeRenderer {
       uHoleGhost: { value: 0 },
       uOverlayOn: { value: new THREE.Vector4(0, 0, 0, 0) }, // Achtung: Vector4() hat w = 1
     };
-    this.setLook(look);
+    this.splatTex = this.makeSplatTex();
+    const q0 = quality(LandscapeRenderer.detail);
+    this.texK = q0.k;
+    this.makeArrays(q0.size);
+    this.updateLayerUniforms();
     this.computeRanges();
 
     const geo = new THREE.InstancedBufferGeometry();
@@ -304,6 +656,8 @@ export class LandscapeRenderer {
     this.updateBoundingVolumes(geo);
 
     const mat = new THREE.MeshStandardMaterial({ roughness: 0.92, metalness: 0 });
+    // W_CUSTOM_NORMAL/W_TERRAIN: Wetter-Shader nutzt Geländenormale, Pfützen-Neigung und Porosität der Layer
+    mat.defines = { LS_K: this.texK, W_CUSTOM_NORMAL: 'lsN', W_TERRAIN: '' };
     mat.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, this.uniforms);
       shader.vertexShader = shader.vertexShader
@@ -311,27 +665,15 @@ export class LandscapeRenderer {
         .replace('#include <beginnormal_vertex>', 'vec3 objectNormal = vec3(0.0, 1.0, 0.0);')
         .replace('#include <begin_vertex>', MORPH_VERT);
       shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', `#include <common>\n${COMMON_FRAG}\n${COLOR_FRAG}\n${OVERLAY_FRAG}`)
-        .replace(
-          '#include <color_fragment>',
-          /* glsl */ `#include <color_fragment>
-  lsClipEd();
-  vec3 lsN = lsNormal();
-  {
-    float ang = degrees(acos(clamp(lsN.y, 0.0, 1.0)));
-    float rockK = smoothstep(uSlope - 4.0, uSlope + 4.0, ang);
-    vec2 wp = vGrid * uQuad;
-    float macro = lsNoise(wp / 37.0) * 0.6 + lsNoise(wp / 9.0) * 0.4;
-    vec3 grass = uGrass * (0.8 + 0.4 * macro);
-    vec3 rock = uRock * (0.85 + 0.3 * lsNoise(wp / 4.0));
-    diffuseColor.rgb *= mix(grass, rock, rockK);
-  }`,
-        )
-        .replace('#include <normal_fragment_begin>', /* glsl */ `float faceDirection = 1.0;\nvec3 normal = normalize(mat3(viewMatrix) * lsN);\nvec3 nonPerturbedNormal = normal;
+        .replace('#include <common>', `#include <common>\n${COMMON_FRAG}\n${LAYER_FRAG}\n${OVERLAY_FRAG}`)
+        .replace('#include <color_fragment>', `#include <color_fragment>\n  lsClipEd();\n  vec3 lsN = lsNormal();\n${LAYER_APPLY}`)
+        .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n  roughnessFactor = lsRough;')
+        .replace('#include <normal_fragment_begin>', /* glsl */ `float faceDirection = 1.0;\nvec3 normal = normalize(mat3(viewMatrix) * lsDN);\nvec3 nonPerturbedNormal = normalize(mat3(viewMatrix) * lsN);
 /*NORMAL_BEGIN*/`)
+        .replace('#include <aomap_fragment>', '#include <aomap_fragment>\n  reflectedLight.indirectDiffuse *= lsAO;\n  reflectedLight.indirectSpecular *= mix(1.0, lsAO, 0.6);')
         .replace('#include <dithering_fragment>', `#include <dithering_fragment>\n${OVERLAY_APPLY}`);
     };
-    mat.customProgramCacheKey = () => 'landscape-cdlod';
+    mat.customProgramCacheKey = () => 'landscape-cdlod-' + this.texK;
 
     // Schatten: gleiche Verschiebung, Löcher verwerfen
     const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
@@ -353,6 +695,7 @@ export class LandscapeRenderer {
     this.mesh.userData.landscape = this;
 
     this.offData = d.onChange((r, kind) => this.onDataChange(r, kind));
+    this.offTex = onTexturesInvalidated(() => this.loadTextures());
   }
 
   /** In die LOD-Auswahl aufnehmen (Objekt ist in der Szene) */
@@ -364,10 +707,91 @@ export class LandscapeRenderer {
     live.delete(this);
   }
 
-  setLook(look: LandscapeLook): void {
-    (this.uniforms.uGrass.value as THREE.Color).set(look.grass);
-    (this.uniforms.uRock.value as THREE.Color).set(look.rock);
-    this.uniforms.uSlope.value = look.slope;
+  // ---------- Material-Layer ----------
+
+  private makeSplatTex(): THREE.DataTexture {
+    const d = this.data;
+    const s = d.splat;
+    const t = s ? new THREE.DataTexture(s, d.SW, d.SH * 2, THREE.RGBAFormat, THREE.UnsignedByteType) : new THREE.DataTexture(new Uint8Array(4), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+    t.minFilter = t.magFilter = THREE.LinearFilter;
+    t.generateMipmaps = false;
+    t.unpackAlignment = 1;
+    t.needsUpdate = true;
+    this.uniforms.uSplat.value = t;
+    (this.uniforms.uSplatInfo.value as THREE.Vector4).set(d.SW, d.SH, d.splatDiv, s ? 1 : 0);
+    return t;
+  }
+
+  private makeArrays(size: number): void {
+    this.albTex?.dispose();
+    this.nrmTex?.dispose();
+    this.armTex?.dispose();
+    this.texSize = size;
+    this.arraysUploaded = false;
+    this.slice = [];
+    this.albTex = makeArray(size, 4, [128, 128, 128, 255], true);
+    this.nrmTex = makeArray(size, 2, [128, 128], false);
+    this.armTex = makeArray(size, 4, [220, 255, 128, 255], false);
+    this.albTex.onUpdate = () => (this.arraysUploaded = true);
+    this.uniforms.uAlb.value = this.albTex;
+    this.uniforms.uNrm.value = this.nrmTex;
+    this.uniforms.uArm.value = this.armTex;
+    this.loadTextures();
+  }
+
+  /** fehlende/geänderte Layer-Texturen laden und in ihre Array-Ebene (= Splat-Kanal) schreiben */
+  private loadTextures(): void {
+    const size = this.texSize;
+    for (const l of this.data.layers) {
+      const p = loadTextureSet(l.texture, size);
+      if (this.slice[l.ch] === p) continue;
+      this.slice[l.ch] = p;
+      const ch = l.ch;
+      p.then((set) => {
+        if (this.disposed || this.texSize !== size || this.slice[ch] !== p) return;
+        this.writeSlice(ch, set);
+      }).catch((e) => console.warn('Landscape-Textur', l.texture, e));
+    }
+  }
+
+  private writeSlice(ch: number, set: TexSetData): void {
+    const px = this.texSize * this.texSize;
+    const put = (t: THREE.DataArrayTexture, src: Uint8Array, comps: number) => {
+      (t.image.data as Uint8Array).set(src.subarray(0, px * comps), ch * px * comps);
+      // vor dem ersten Upload würde addLayerUpdate nur diese Ebene hochladen → dann alles auf einmal
+      if (this.arraysUploaded) t.addLayerUpdate(ch);
+      t.needsUpdate = true;
+    };
+    put(this.albTex, set.albedo, 4);
+    put(this.nrmTex, set.normal, 2);
+    put(this.armTex, set.arm, 4);
+  }
+
+  private updateLayerUniforms(): void {
+    const L = this.data.layers;
+    const u = this.uniforms;
+    const lay = u.uLay.value as THREE.Vector4[];
+    const tint = u.uLayTint.value as THREE.Vector4[];
+    const aa = u.uAutoA.value as THREE.Vector4[];
+    const ab = u.uAutoB.value as THREE.Vector4[];
+    const sf = u.uLaySurf.value as THREE.Vector4[];
+    const c = new THREE.Color();
+    for (let i = 0; i < MAX_LAYERS; i++) {
+      const l = L[i];
+      if (!l) {
+        ab[i].set(0, 0, 0, 0);
+        continue;
+      }
+      lay[i].set(1 / Math.max(0.05, l.tile), l.ch, l.rough, l.normal);
+      c.set(l.tint);
+      tint[i].set(c.r, c.g, c.b, l.ch);
+      aa[i].set(l.auto.slopeMin, l.auto.slopeMax, l.auto.heightMin, l.auto.heightMax);
+      ab[i].set(l.auto.on && i > 0 ? 1 : 0, l.auto.curv, l.auto.soft, l.auto.noise);
+      const s = surfaceDef(l.surface);
+      sf[i].set(s.porosity, s.puddle, 0, 0);
+    }
+    u.uLayerN.value = Math.min(L.length, MAX_LAYERS);
+    u.uCurvStep.value = this.data.curvStep();
   }
 
   setOverlay(o: LandscapeOverlay): void {
@@ -429,6 +853,13 @@ export class LandscapeRenderer {
     if (LandscapeRenderer.detail !== this.lastDetail) {
       this.lastDetail = LandscapeRenderer.detail;
       this.computeRanges();
+      const q = quality(this.lastDetail);
+      if (q.size !== this.texSize) this.makeArrays(q.size);
+      if (q.k !== this.texK) {
+        this.texK = q.k;
+        this.mesh.material.defines!.LS_K = q.k;
+        this.mesh.material.needsUpdate = true;
+      }
     }
     const mesh = this.mesh;
     if (!this.nodeAttr.array.length || mesh.geometry.getAttribute('aNode') !== this.nodeAttr) mesh.geometry.setAttribute('aNode', this.nodeAttr);
@@ -523,6 +954,19 @@ export class LandscapeRenderer {
       this.uniforms.uHoleSub.value = d.holeSub;
       return;
     }
+    if (kind === 'layers') {
+      this.updateLayerUniforms();
+      this.loadTextures();
+      return;
+    }
+    if (kind === 'splat') {
+      // Splatmap neu angelegt/ersetzt → neue Textur, sonst nur geänderte Zeilen
+      if (!d.splat || this.splatTex.image.data !== d.splat) {
+        this.splatTex.dispose();
+        this.splatTex = this.makeSplatTex();
+      } else uploadRows(this.splatTex, d.SW, r);
+      return;
+    }
     uploadRows(this.heightTex, d.VW, r);
     const nr = d.clip({ x: r.x - 1, y: r.y - 1, w: r.w + 2, h: r.h + 2 })!;
     this.computeNormals(nr);
@@ -570,14 +1014,20 @@ export class LandscapeRenderer {
   }
 
   dispose(): void {
+    this.disposed = true;
     live.delete(this);
     this.offData();
+    this.offTex();
     this.mesh.geometry.dispose();
     this.mesh.material.dispose();
     this.mesh.customDepthMaterial?.dispose();
     this.heightTex.dispose();
     this.normalTex.dispose();
     this.holesTex.dispose();
+    this.splatTex.dispose();
+    this.albTex.dispose();
+    this.nrmTex.dispose();
+    this.armTex.dispose();
   }
 }
 

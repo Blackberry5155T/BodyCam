@@ -53,6 +53,11 @@ export const VOLUMETRIC_LABELS = ['Niedrig', 'Mittel', 'Hoch'];
 export const TERRAIN_LABELS = ['Niedrig', 'Mittel', 'Hoch', 'Ultra'];
 /** Detail-Faktor der Landscape-LODs (Abstand, ab dem eine gröbere Stufe benutzt wird) */
 export const TERRAIN_DETAIL = [1.5, 2, 2.5, 3.5];
+export const FOLIAGE_LABELS = ['Niedrig', 'Mittel', 'Hoch', 'Ultra'];
+/** Faktor auf die Dichte von Deko-Foliage und Layer-Gras */
+export const FOLIAGE_DENSITY = [0.3, 0.55, 0.8, 1];
+/** Faktor auf Sichtweite, LOD- und Impostor-Abstände der Foliage */
+export const FOLIAGE_DISTANCE = [0.5, 0.75, 1, 1.4];
 export const MM_MODES = ['Team Deathmatch', 'Extraction', 'Horde (Koop)', 'Hunt (PvE)'];
 export const MM_REGIONS = ['Automatisch', 'EU-West', 'EU-Ost', 'Nordamerika', 'Asien'];
 export const MM_PARTY = ['Solo', 'Duo', 'Squad (4)'];
@@ -69,9 +74,13 @@ export interface SettingsData {
   shadows: number; // Index in SHADOW_LABELS
   renderScale: number; // Faktor auf devicePixelRatio
   bloom: boolean;
+  bloomStrength: number; // Faktor auf die Basisstärke (1 = alter Wert, Standard 0.5)
   reflections: number; // Index in REFLECTION_LABELS (Pfützen-Spiegelungen)
   volumetrics: number; // Index in VOLUMETRIC_LABELS (Nebel-Schritte, Partikelmenge)
   terrainDetail: number; // Index in TERRAIN_LABELS (Landscape-LOD)
+  foliageDensity: number; // Index in FOLIAGE_LABELS (FOLIAGE_DENSITY)
+  foliageDistance: number; // Index in FOLIAGE_LABELS (FOLIAGE_DISTANCE)
+  grass: boolean; // Layer-Gras der Landscapes
   brightness: number;
   fogEnabled: boolean;
   viewDistance: number;
@@ -87,11 +96,15 @@ export interface SettingsData {
   mmParty: number;
 }
 
-export const QUALITY_PRESETS: Pick<SettingsData, 'shadows' | 'renderScale' | 'bloom' | 'reflections' | 'volumetrics' | 'terrainDetail'>[] = [
-  { shadows: 0, renderScale: 0.75, bloom: false, reflections: 0, volumetrics: 0, terrainDetail: 0 },
-  { shadows: 1, renderScale: 1.0, bloom: true, reflections: 1, volumetrics: 1, terrainDetail: 1 },
-  { shadows: 2, renderScale: 1.0, bloom: true, reflections: 2, volumetrics: 2, terrainDetail: 2 },
-  { shadows: 2, renderScale: 1.5, bloom: true, reflections: 2, volumetrics: 2, terrainDetail: 3 },
+/** Optionen, die das Qualitäts-Preset setzt */
+const PRESET_KEYS = ['shadows', 'renderScale', 'bloom', 'reflections', 'volumetrics', 'terrainDetail', 'foliageDensity', 'foliageDistance', 'grass'] as const;
+type PresetKey = (typeof PRESET_KEYS)[number];
+
+export const QUALITY_PRESETS: Pick<SettingsData, PresetKey>[] = [
+  { shadows: 0, renderScale: 0.75, bloom: false, reflections: 0, volumetrics: 0, terrainDetail: 0, foliageDensity: 0, foliageDistance: 0, grass: false },
+  { shadows: 1, renderScale: 1.0, bloom: true, reflections: 1, volumetrics: 1, terrainDetail: 1, foliageDensity: 1, foliageDistance: 1, grass: true },
+  { shadows: 2, renderScale: 1.0, bloom: true, reflections: 2, volumetrics: 2, terrainDetail: 2, foliageDensity: 2, foliageDistance: 2, grass: true },
+  { shadows: 2, renderScale: 1.5, bloom: true, reflections: 2, volumetrics: 2, terrainDetail: 3, foliageDensity: 3, foliageDistance: 3, grass: true },
 ];
 
 const DEFAULTS: SettingsData = {
@@ -104,9 +117,13 @@ const DEFAULTS: SettingsData = {
   shadows: 2,
   renderScale: 1,
   bloom: true,
+  bloomStrength: 0.5,
   reflections: 2,
   volumetrics: 2,
   terrainDetail: 2,
+  foliageDensity: 2,
+  foliageDistance: 2,
+  grass: true,
   brightness: 1,
   fogEnabled: true,
   viewDistance: 25,
@@ -147,17 +164,9 @@ export class Settings {
     if (this.data[key] === value) return;
     this.data[key] = value;
     // Einzelne Grafikoption geändert → Preset wird "Benutzerdefiniert"
-    if (key === 'shadows' || key === 'renderScale' || key === 'bloom' || key === 'reflections' || key === 'volumetrics' || key === 'terrainDetail') {
+    if ((PRESET_KEYS as readonly string[]).includes(key)) {
       const d = this.data;
-      const match = QUALITY_PRESETS.findIndex(
-        (p) =>
-          p.shadows === d.shadows &&
-          p.renderScale === d.renderScale &&
-          p.bloom === d.bloom &&
-          p.reflections === d.reflections &&
-          p.volumetrics === d.volumetrics &&
-          p.terrainDetail === d.terrainDetail,
-      );
+      const match = QUALITY_PRESETS.findIndex((p) => PRESET_KEYS.every((k) => p[k] === d[k]));
       this.data.quality = match === -1 ? QUALITY_LABELS.length - 1 : match;
     }
     this.save();
@@ -170,12 +179,7 @@ export class Settings {
     this.data.quality = index;
     Object.assign(this.data, preset);
     this.save();
-    this.emit('shadows');
-    this.emit('renderScale');
-    this.emit('bloom');
-    this.emit('reflections');
-    this.emit('volumetrics');
-    this.emit('terrainDetail');
+    for (const k of PRESET_KEYS) this.emit(k);
     this.emit('quality');
   }
 

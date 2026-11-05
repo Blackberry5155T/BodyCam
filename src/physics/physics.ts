@@ -19,9 +19,13 @@ export function initPhysics(): Promise<void> {
 /** Kollisionsgruppen: Spieler-Kapsel ist nicht Teil der Welt-Abfragen */
 const GROUP_WORLD = 0x0001;
 const GROUP_PLAYER = 0x0002;
+/** nur Sicht-Blocker (Büsche, Baumkronen): Spieler läuft durch, nur Sicht-Abfragen der KI treffen sie */
+const GROUP_SIGHT = 0x0004;
 const groups = (member: number, filter: number) => ((member & 0xffff) << 16) | (filter & 0xffff);
 /** Abfragen, die nur Welt-Geometrie treffen sollen */
 export const WORLD_QUERY = groups(0xffff, GROUP_WORLD);
+/** Sichtlinie der KI: Welt + Sicht-Blocker */
+export const SIGHT_QUERY = groups(0xffff, GROUP_WORLD | GROUP_SIGHT);
 
 const GROUND_HALF = 50000; // 100 × 100 km
 
@@ -147,6 +151,7 @@ function describe(c: Collider): RAPIER.ColliderDesc {
       desc = RAPIER.ColliderDesc.trimesh(c.vertices, c.indices, RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES);
       break;
   }
+  if (c.type === 'cylinder' && c.sightOnly) return desc.setCollisionGroups(groups(GROUP_SIGHT, 0xffff));
   return desc.setCollisionGroups(groups(GROUP_WORLD, 0xffff));
 }
 

@@ -59,6 +59,9 @@ const P: Record<string, string> = {
   leaf: '<path d="M5 19c0-9 6-14 15-14 0 9-5 15-14 15"/><path d="M5 19 13 11"/>',
   brush: '<path d="M4 8l8-4 8 4v8l-8 4-8-4z"/><path d="M12 12v8M4 8l8 4 8-4"/><path d="M8 6.5v4" stroke-dasharray="2 2"/>',
   spline: '<circle cx="4" cy="18" r="2"/><circle cx="20" cy="6" r="2"/><path d="M6 17c5-1 3-9 12-10"/><path d="M12 5l3 3M9 16l3 3" opacity=".6"/>',
+  road: '<path d="M8 3 4 21M16 3l4 18"/><path d="M12 4v3M12 10.5v3M12 17v3"/>',
+  fence: '<path d="M5 4v17M12 4v17M19 4v17"/><path d="M3 8h18M3 16h18"/>',
+  cable: '<path d="M5 3v18M19 3v18"/><path d="M5 6c4 6 10 6 14 0"/><path d="M5 10c4 6 10 6 14 0" opacity=".6"/>',
   water: '<path d="M2 9c2.5-2 4.5 2 7 0s4.5 2 7 0 4.5 2 6 0"/><path d="M2 14c2.5-2 4.5 2 7 0s4.5 2 7 0 4.5 2 6 0"/><path d="M2 19c2.5-2 4.5 2 7 0s4.5 2 7 0 4.5 2 6 0"/>',
 };
 
@@ -90,6 +93,12 @@ export const TYPE_ICONS: Record<string, string> = {
   screen: 'monitor',
   empty: 'empty',
   model: 'model',
+  road: 'road',
+  splinemesh: 'fence',
+  cable: 'cable',
+  powerpole: 'pole',
+  landscape: 'mountain',
+  foliage: 'leaf',
 };
 
 export const CATEGORY_COLORS: Record<string, string> = {
@@ -100,4 +109,5 @@ export const CATEGORY_COLORS: Record<string, string> = {
   Effekte: '#ff7a3d',
   Gameplay: '#46d36b',
   Modelle: '#ff5fa2',
+  Splines: '#ffb347',
 };

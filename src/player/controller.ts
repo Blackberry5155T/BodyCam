@@ -88,6 +88,10 @@ export class PlayerController {
   coverState: 'none' | 'over' | 'left' | 'right' | 'blocked' = 'none';
   private focus: FocusTarget | null = null;
   private lockListeners: ((locked: boolean) => void)[] = [];
+  /** Fuß setzt auf (Schrittgeräusch): Art, Füße (Welt), Tempo (m/s; Landung: Fallgeschwindigkeit), geduckt */
+  onFootstep?: (kind: 'step' | 'land', feet: THREE.Vector3, speed: number, crouching: boolean) => void;
+  private lastStep = 0;
+  private _feet = new THREE.Vector3();
 
   // Kollision (Rapier): Kapsel von den Füßen bis zur Augenhöhe
   private kcc: RAPIER.KinematicCharacterController;
@@ -341,6 +345,7 @@ export class PlayerController {
         const impact = Math.min(-fallSpeed, 10);
         this.landing.velocity -= impact * 0.32;
         this.trauma = Math.min(1, this.trauma + impact * 0.04);
+        if (impact > 2) this.footstep('land', impact);
       }
     } else {
       // Kopf an der Decke: Aufwärtsbewegung abbrechen
@@ -349,6 +354,12 @@ export class PlayerController {
     }
 
     this.updateCamera(dt, sprinting);
+  }
+
+  private footstep(kind: 'step' | 'land', speed: number): void {
+    if (!this.onFootstep) return;
+    this._feet.set(this.position.x, this.position.y - this.height, this.position.z);
+    this.onFootstep(kind, this._feet, speed, this.crouching);
   }
 
   private updateCamera(dt: number, sprinting: boolean): void {
@@ -368,6 +379,12 @@ export class PlayerController {
     this.bobAmount = damp(this.bobAmount, moveFactor, 7, dt);
     const stride = 1.0 + 0.05 * this.groundSpeed;
     this.bobPhase += (this.groundSpeed / stride) * Math.PI * dt;
+    // Fuß setzt auf, wenn |sin(Phase)| = 0 → je π ein Schritt
+    const stepIdx = Math.floor(this.bobPhase / Math.PI);
+    if (stepIdx !== this.lastStep) {
+      this.lastStep = stepIdx;
+      if (this.onGround && this.groundSpeed > 0.6) this.footstep('step', this.groundSpeed);
+    }
     const walk = Math.min(this.bobAmount, 1);
     const run = Math.max(0, this.bobAmount - 1);
     const steady = 1 - this.aimBlend * 0.5; // beim Zielen ruhigere Kamera

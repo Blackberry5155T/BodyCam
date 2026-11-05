@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { h, numberField, dialog, pickFile, toast } from '../ui.ts';
+import { h, numberField, dialog, pickFile, pickFiles, toast, confirmDialog } from '../ui.ts';
 import { icon } from '../icons.ts';
 import { deflateSync, inflateSync } from 'fflate';
 import { GridRecorder } from '../history.ts';
@@ -30,12 +30,17 @@ import {
 } from '../../world/landscape/sculpt.ts';
 import { DEFAULT_EROSION, type ErosionKind, type ErosionParams } from '../../world/landscape/erosion.ts';
 import { downloadBytes, exportPng16, exportR16, heightsFromMap, readHeightmap, type Heightmap } from '../../world/landscape/heightmap.ts';
+import { MAX_LAYERS, cloneLayers, freeChannel, makeLayer, type LandscapeLayer, type LayerAuto } from '../../world/landscape/layers.ts';
+import { brushSplatRect, clearChannel, exportWeightmaps, importWeightmaps, paintSplat, upperPlane, type PaintMode } from '../../world/landscape/paint.ts';
+import { textureLabel, textureLibrary } from '../../world/landscape/textures.ts';
+import { SURFACE_OPTIONS, type SurfaceId } from '../../world/surfaces.ts';
+import { GRASS_PRESETS } from '../../world/foliage/grass.ts';
 
 // Landscape-Modus (Phase 1): Landschaft anlegen, formen (Pinsel), Rampe, Erosion, Löcher, Region-Werkzeuge,
 // Heightmap-Import/Export. Die linke Maustaste gehört dem Werkzeug; Kamera wie gewohnt (RMB + WASD, Alt, MMB).
 // Jeder Strich ist ein Undo-Schritt (nur geänderte 64er-Kacheln, siehe history.ts).
 
-type ToolId = 'sculpt' | 'smooth' | 'flatten' | 'ramp' | 'noise' | 'erosion' | 'holes' | 'region';
+type ToolId = 'sculpt' | 'smooth' | 'flatten' | 'ramp' | 'noise' | 'erosion' | 'holes' | 'region' | 'paint';
 
 const TOOLS: { id: ToolId; label: string; hint: string }[] = [
   { id: 'sculpt', label: 'Formen', hint: 'Anheben, Umschalt = Senken' },
@@ -46,12 +51,13 @@ const TOOLS: { id: ToolId; label: string; hint: string }[] = [
   { id: 'erosion', label: 'Erosion', hint: 'Pinsel oder ganze Region/Landscape' },
   { id: 'holes', label: 'Löcher', hint: 'Löcher malen oder wieder füllen (Höhlen-Eingänge), Umschalt = umkehren' },
   { id: 'region', label: 'Region', hint: 'Rechteck aufziehen: Kopieren, Einfügen, Spiegeln, Drehen' },
+  { id: 'paint', label: 'Malen', hint: 'Material-Layer malen, Umschalt = Layer radieren' },
 ];
 
 /** kleinster Pinsel (m) — klein genug für feine Löcher */
 const MIN_RADIUS = 0.1;
 
-const BRUSH_TOOLS = new Set<ToolId>(['sculpt', 'smooth', 'flatten', 'noise', 'erosion', 'holes']);
+const BRUSH_TOOLS = new Set<ToolId>(['sculpt', 'smooth', 'flatten', 'noise', 'erosion', 'holes', 'paint']);
 
 const COLORS: Record<string, THREE.Color> = {
   raise: new THREE.Color(0.35, 1, 0.45),
@@ -62,6 +68,7 @@ const COLORS: Record<string, THREE.Color> = {
   erosion: new THREE.Color(1, 0.6, 0.25),
   holes: new THREE.Color(1, 0.25, 0.25),
   paste: new THREE.Color(0.3, 1, 1),
+  paint: new THREE.Color(0.35, 0.85, 1),
 };
 
 const PREFS_KEY = 'bodycam.editor.landscape';
@@ -110,6 +117,8 @@ interface Prefs {
   grid: boolean;
   /** Löcher-Werkzeug: füllen statt malen (Umschalt kehrt um) */
   holeFill: boolean;
+  /** Malen: Modus (Umschalt = Radieren) */
+  paintMode: PaintMode;
 }
 
 const DEFAULT_PREFS: Prefs = {
@@ -131,6 +140,7 @@ const DEFAULT_PREFS: Prefs = {
   fitMargin: 4,
   grid: false,
   holeFill: false,
+  paintMode: 'paint',
 };
 
 function loadPrefs(): Prefs {
@@ -166,7 +176,9 @@ export function createLandscapeMode(ctx: ModeContext): EditorMode {
   let lastPointer: { x: number; y: number } | null = null;
 
   // Strich
-  let stroke: { t: Target; heights: GridRecorder; holes: GridRecorder; flatten: number; acc: number } | null = null;
+  let stroke: { t: Target; heights: GridRecorder; holes: GridRecorder; splat: GridRecorder; flatten: number; acc: number } | null = null;
+  /** gewählter Layer (id) zum Malen/Bearbeiten */
+  let selLayer = '';
   // Rampe
   let rampA: Hover | null = null;
   let rampB: Hover | null = null;
@@ -226,6 +238,8 @@ export function createLandscapeMode(ctx: ModeContext): EditorMode {
         return shift ? COLORS.lower : COLORS.raise;
       case 'holes':
         return filling() ? COLORS.raise : COLORS.holes;
+      case 'paint':
+        return paintMode() === 'paint' ? COLORS.paint : paintMode() === 'erase' ? COLORS.holes : COLORS.flatten;
       default:
         return COLORS[prefs.tool] ?? COLORS.raise;
     }
@@ -265,16 +279,41 @@ export function createLandscapeMode(ctx: ModeContext): EditorMode {
 
   function recorders(d: LandscapeData) {
     return {
-      heights: new GridRecorder(d.heights, d.VW, d.VH, 1, (r) => d.changed(r, 'height')),
+      heights: new GridRecorder(() => d.editHeights, d.VW, d.VH, 1, (r) => d.changed(r, 'height')),
       // Lochraster wird bei Auflösungswechsel ersetzt → immer das aktuelle nehmen
       holes: new GridRecorder(() => d.holes, d.HW, d.HH, 1, (r) => d.changed(r, 'holes')),
+      // Splatmap entsteht erst beim ersten Malen (ensureSplat) und kann beim Import ersetzt werden
+      splat: new GridRecorder(() => d.ensureSplat(), d.SW, d.SH * 2, 4, (r) => d.changed(r, 'splat')),
     };
+  }
+
+  /** Malen: Panel-Modus, Umschalt = Radieren (bzw. zurück zum Malen) */
+  function paintMode(): PaintMode {
+    if (!shift) return prefs.paintMode;
+    return prefs.paintMode === 'erase' ? 'paint' : 'erase';
+  }
+
+  /** gewählter Layer der Landscape (fällt auf den obersten zurück) */
+  function currentLayer(d: LandscapeData): LandscapeLayer | null {
+    return d.layers.find((l) => l.id === selLayer) ?? d.layers[d.layers.length - 1] ?? null;
   }
 
   function applyBrush(dt: number): void {
     if (!stroke || !hover || hover.t.obj.id !== stroke.t.obj.id) return;
     const d = stroke.t.entry.data;
     const b = makeBrush(d, hover);
+    if (prefs.tool === 'paint') {
+      const layer = currentLayer(d);
+      const r = brushSplatRect(d, b);
+      if (!r || !layer) return;
+      const r1 = upperPlane(d, r);
+      stroke.splat.touch(r);
+      stroke.splat.touch(r1);
+      paintSplat(d, b, r, layer.ch, dt, paintMode());
+      d.changed(r, 'splat');
+      d.changed(r1, 'splat');
+      return;
+    }
     if (prefs.tool === 'holes') {
       const r = brushHoleRect(d, b);
       if (!r) return;
@@ -311,6 +350,7 @@ export function createLandscapeMode(ctx: ModeContext): EditorMode {
     const label = TOOLS.find((t) => t.id === prefs.tool)?.label ?? 'Pinsel';
     state.commitData(stroke.heights.finish(`Landscape: ${label}`));
     state.commitData(stroke.holes.finish(`Landscape: ${label}`));
+    state.commitData(stroke.splat.finish(`Landscape: ${label}`));
     stroke = null;
   }
 
@@ -513,10 +553,10 @@ export function createLandscapeMode(ctx: ModeContext): EditorMode {
             const i = z * W + x;
             const k = (r.y + z) * d.VW + r.x + x;
             const dd = dist[i] / 3;
-            if (dd === 0) d.heights[k] = hit[i];
+            if (dd === 0) d.editHeights[k] = hit[i];
             else if (margin > 0 && dd < margin) {
               const w = 1 - smoothstep(dd / margin);
-              d.heights[k] += (near[i] - d.heights[k]) * w;
+              d.editHeights[k] += (near[i] - d.editHeights[k]) * w;
             }
           }
       });
@@ -546,7 +586,7 @@ export function createLandscapeMode(ctx: ModeContext): EditorMode {
     const target = t;
     const d = target.entry.data;
     const src = new Float32Array(rect.w * rect.h);
-    for (let y = 0; y < rect.h; y++) src.set(d.heights.subarray((rect.y + y) * d.VW + rect.x, (rect.y + y) * d.VW + rect.x + rect.w), y * rect.w);
+    for (let y = 0; y < rect.h; y++) src.set(d.editHeights.subarray((rect.y + y) * d.VW + rect.x, (rect.y + y) * d.VW + rect.x + rect.w), y * rect.w);
     const work = src.slice();
     const worker = new Worker(new URL('../../world/landscape/erosion.worker.ts', import.meta.url), { type: 'module' });
     job = { worker, progress: 0, label: rt ? 'Region' : 'ganze Landscape' };
@@ -571,7 +611,7 @@ export function createLandscapeMode(ctx: ModeContext): EditorMode {
               const e = Math.min(x, y, rect.w - 1 - x, rect.h - 1 - y);
               w = e >= fade ? 1 : smoothstep(e / fade);
             }
-            d.heights[(rect.y + y) * d.VW + rect.x + x] = src[i] + (out[i] - src[i]) * w;
+            d.editHeights[(rect.y + y) * d.VW + rect.x + x] = src[i] + (out[i] - src[i]) * w;
           }
       });
       ctx.status('Erosion fertig');
@@ -716,7 +756,7 @@ export function createLandscapeMode(ctx: ModeContext): EditorMode {
         primary: true,
         action: () => {
           const heights = heightsFromMap(map, d.VW, d.VH, min, max);
-          editHeights(t, [{ x: 0, y: 0, w: d.VW, h: d.VH }], 'Landscape: Heightmap importieren', () => d.heights.set(heights));
+          editHeights(t, [{ x: 0, y: 0, w: d.VW, h: d.VH }], 'Landscape: Heightmap importieren', () => d.editHeights.set(heights));
           ctx.status('Heightmap importiert');
         },
       },
@@ -767,6 +807,295 @@ export function createLandscapeMode(ctx: ModeContext): EditorMode {
     b.addEventListener('click', fn);
     return b;
   };
+
+  // ---------- Material-Layer ----------
+
+  /** Layer-Liste ändern (ein Undo-Schritt); optional mit Splatmap vorher/nachher (Layer entfernen) */
+  function commitLayers(t: Target, label: string, before: LandscapeLayer[], after: LandscapeLayer[], splat?: { before: Uint8Array | null; after: Uint8Array | null }): void {
+    const d = t.entry.data;
+    const pack = (s: Uint8Array | null | undefined) => (s ? deflateSync(s, { level: 1 }) : null);
+    const sb = splat ? pack(splat.before) : null;
+    const sa = splat ? pack(splat.after) : null;
+    const apply = (l: LandscapeLayer[], s: Uint8Array | null) => {
+      d.setLayers(cloneLayers(l));
+      if (splat) d.setSplat(s ? inflateSync(s) : null);
+      render();
+    };
+    state.commitData({
+      label,
+      bytes: 2048 + (sb?.byteLength ?? 0) + (sa?.byteLength ?? 0),
+      undo: () => apply(before, sb),
+      redo: () => apply(after, sa),
+    });
+  }
+
+  /** einzelne Eigenschaft ändern; live = während des Ziehens (Undo erst beim Loslassen) */
+  let liveBefore: LandscapeLayer[] | null = null;
+  function editLayer(t: Target, id: string, label: string, fn: (l: LandscapeLayer) => void, live = false): void {
+    const d = t.entry.data;
+    const before = liveBefore ?? cloneLayers(d.layers);
+    const next = cloneLayers(d.layers);
+    const l = next.find((x) => x.id === id);
+    if (!l) return;
+    fn(l);
+    d.setLayers(next);
+    if (live) {
+      liveBefore = before;
+      return;
+    }
+    liveBefore = null;
+    commitLayers(t, `Landscape: ${label}`, before, cloneLayers(next));
+  }
+
+  function addLayer(t: Target): void {
+    const d = t.entry.data;
+    const ch = freeChannel(new Set(d.layers.map((l) => l.ch)));
+    if (ch < 0) return void toast(`Höchstens ${MAX_LAYERS} Layer`, 'error');
+    const before = cloneLayers(d.layers);
+    const l = makeLayer(ch, `Layer ${d.layers.length + 1}`, 'proc:erde', 'erde', 3);
+    const after = [...cloneLayers(d.layers), l];
+    d.setLayers(after);
+    selLayer = l.id;
+    commitLayers(t, 'Landscape: Layer hinzufügen', before, cloneLayers(after));
+    render();
+  }
+
+  async function removeLayer(t: Target, id: string): Promise<void> {
+    const d = t.entry.data;
+    const l = d.layers.find((x) => x.id === id);
+    if (!l) return;
+    if (d.layers.length <= 1) return void toast('Die Basis-Layer muss bleiben', 'error');
+    if (!(await confirmDialog('Layer entfernen', `„${l.name}“ entfernen? Gemalte Bereiche dieses Layers gehen verloren (Rückgängig möglich).`, 'Entfernen', true))) return;
+    const before = cloneLayers(d.layers);
+    const sBefore = d.splat ? d.splat.slice() : null;
+    const after = cloneLayers(d.layers).filter((x) => x.id !== id);
+    d.setLayers(after);
+    if (d.splat) {
+      clearChannel(d, l.ch);
+      d.setSplat(d.splat);
+    }
+    commitLayers(t, `Landscape: Layer „${l.name}“ entfernen`, before, cloneLayers(after), { before: sBefore, after: d.splat ? d.splat.slice() : null });
+    render();
+  }
+
+  /** dir = +1: nach oben (über andere Layer), -1: nach unten (Index 0 = Basis) */
+  function moveLayer(t: Target, id: string, dir: number): void {
+    const d = t.entry.data;
+    const i = d.layers.findIndex((x) => x.id === id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= d.layers.length) return;
+    const before = cloneLayers(d.layers);
+    const after = cloneLayers(d.layers);
+    [after[i], after[j]] = [after[j], after[i]];
+    d.setLayers(after);
+    commitLayers(t, 'Landscape: Layer verschieben', before, cloneLayers(after));
+    render();
+  }
+
+  // Content Browser: Doppelklick auf eine Textur weist sie dem gewählten Layer zu
+  textureLibrary().onPick((ref) => {
+    if (!active || prefs.tool !== 'paint') return;
+    const t = selectedTarget();
+    const l = t && currentLayer(t.entry.data);
+    if (!t || !l) return;
+    editLayer(t, l.id, 'Layer-Textur', (x) => (x.texture = ref));
+    ctx.status(`„${l.name}“: Textur ${textureLabel(ref)}`);
+    render();
+  });
+  textureLibrary().onChange(() => {
+    if (active && prefs.tool === 'paint') queueRender();
+  });
+
+  function exportMasks(t: Target): void {
+    const d = t.entry.data;
+    ctx.status('Gewichtsmasken werden berechnet …');
+    // einen Frame Luft für die Statusmeldung
+    setTimeout(() => {
+      const zip = exportWeightmaps(d);
+      const stem = `${state.map.name}_${t.obj.name}_layer`.replace(/[^\w.-]+/g, '_');
+      downloadBytes(zip, `${stem}.zip`, 'application/zip');
+      ctx.status(`${d.layers.length} Gewichtsmasken exportiert (${d.SW} × ${d.SH})`);
+    }, 30);
+  }
+
+  async function importMasks(t: Target): Promise<void> {
+    const files = await pickFiles('.png,.zip');
+    if (!files.length) return;
+    const d = t.entry.data;
+    try {
+      const res = await importWeightmaps(d, files);
+      if (!res.matched.length) throw new Error(`Keine Datei passt zu einem Layer-Namen (${res.unmatched.join(', ')}).`);
+      const before = cloneLayers(d.layers);
+      const sBefore = d.splat ? d.splat.slice() : null;
+      d.setSplat(res.splat);
+      commitLayers(t, 'Landscape: Gewichtsmasken importieren', before, cloneLayers(d.layers), { before: sBefore, after: res.splat.slice() });
+      toast(`Importiert: ${res.matched.join(', ')}${res.unmatched.length ? ` · ohne passenden Layer: ${res.unmatched.join(', ')}` : ''}`, 'ok', 5000);
+    } catch (e) {
+      toast((e as Error).message, 'error', 6000);
+    }
+  }
+
+  async function clearPainted(t: Target): Promise<void> {
+    const d = t.entry.data;
+    if (!d.splat) return;
+    if (!(await confirmDialog('Gemaltes löschen', 'Alle gemalten Layer-Bereiche entfernen? Danach gelten nur noch die Auto-Regeln.', 'Löschen', true))) return;
+    const layers = cloneLayers(d.layers);
+    const sBefore = d.splat.slice();
+    d.setSplat(null);
+    commitLayers(t, 'Landscape: Gemaltes löschen', layers, cloneLayers(layers), { before: sBefore, after: null });
+  }
+
+  function layerSections(t: Target, d: LandscapeData): HTMLElement[] {
+    const cur = currentLayer(d);
+    const lib = textureLibrary();
+    // Liste: oberster Layer zuerst (wie in UE5), Basis unten
+    const list = h('div', { class: 'ls-layers' });
+    for (let i = d.layers.length - 1; i >= 0; i--) {
+      const l = d.layers[i];
+      const img = h('img', { class: 'ls-layer-thumb', alt: '' }) as HTMLImageElement;
+      void lib.thumbnail(l.texture).then((u) => (img.src = u));
+      const item = h(
+        'div',
+        { class: `ls-layer${cur?.id === l.id ? ' on' : ''}`, title: i === 0 ? 'Basis-Layer: bekommt alles, was weder gemalt noch von Auto-Regeln belegt ist' : '' },
+        img,
+        h('div', { class: 'ls-layer-name' }, l.name, h('span', { class: 'dim' }, i === 0 ? ' · Basis' : l.auto.on ? ' · Auto' : '')),
+        h('div', { class: 'ls-layer-sub dim' }, `${textureLabel(l.texture)} · ${SURFACE_OPTIONS.find((s) => s.value === l.surface)?.label ?? l.surface}`),
+      );
+      item.addEventListener('click', () => {
+        selLayer = l.id;
+        render();
+      });
+      list.append(item);
+    }
+    const idx = cur ? d.layers.indexOf(cur) : -1;
+    const btn = (label: string, fn: () => void, enabled: boolean, ico?: string) => {
+      const b = button(label, fn, 'btn', ico);
+      b.toggleAttribute('disabled', !enabled);
+      return b;
+    };
+    const out: HTMLElement[] = [
+      section(
+        'Malen',
+        select<PaintMode>(
+          'Modus',
+          prefs.paintMode,
+          [
+            ['paint', 'Layer malen'],
+            ['erase', 'Layer radieren'],
+            ['reset', 'Auf Auto zurücksetzen'],
+          ],
+          (v) => {
+            prefs.paintMode = v;
+            updateOverlay();
+          },
+        ),
+        h('div', { class: 'mode-note dim' }, 'Umschalt = Radieren. Gemaltes ersetzt die Auto-Regeln; „Zurücksetzen“ gibt die Stelle wieder an sie zurück.'),
+      ),
+      section(
+        `Layer (${d.layers.length}/${MAX_LAYERS})`,
+        list,
+        h(
+          'div',
+          { class: 'ls-buttons' },
+          btn('Neu', () => addLayer(t), d.layers.length < MAX_LAYERS, 'plus'),
+          btn('Nach oben', () => cur && moveLayer(t, cur.id, 1), idx >= 0 && idx < d.layers.length - 1),
+          btn('Nach unten', () => cur && moveLayer(t, cur.id, -1), idx > 0),
+          btn('Entfernen', () => cur && void removeLayer(t, cur.id), d.layers.length > 1 && !!cur),
+        ),
+      ),
+    ];
+    if (cur) out.push(layerProps(t, cur, idx === 0));
+    out.push(
+      section(
+        'Gewichtsmasken',
+        h(
+          'div',
+          { class: 'ls-buttons' },
+          button('Export (PNG je Layer)', () => exportMasks(t), 'btn', 'download'),
+          button('Import…', () => void importMasks(t), 'btn', 'upload'),
+          btn('Gemaltes löschen', () => void clearPainted(t), !!d.splat),
+        ),
+        h('div', { class: 'mode-note dim' }, `Graustufen-PNGs (Dateiname = Layer-Name), z. B. aus World Machine/Gaea. Andere Auflösungen werden angepasst; Raster ${d.SW} × ${d.SH}.`),
+      ),
+    );
+    return out;
+  }
+
+  function layerProps(t: Target, l: LandscapeLayer, isBase: boolean): HTMLElement {
+    const id = l.id;
+    const lnum = (label: string, get: (l: LandscapeLayer) => number, set: (l: LandscapeLayer, v: number) => void, step: number, min?: number, max?: number) =>
+      row(label, numberField({ value: get(l), step, min, max, onChange: (v, live) => editLayer(t, id, label, (x) => set(x, v), live) }));
+    const anum = (label: string, key: keyof Omit<LayerAuto, 'on'>, step: number, min?: number, max?: number) => lnum(label, (x) => x.auto[key], (x, v) => (x.auto[key] = v), step, min, max);
+
+    const name = h('input', { type: 'text', value: l.name, spellcheck: 'false' }) as HTMLInputElement;
+    name.addEventListener('change', () => editLayer(t, id, 'Layer-Name', (x) => (x.name = name.value.trim() || 'Layer')));
+
+    const tex = h('select', {}) as HTMLSelectElement;
+    const groups: Record<string, string> = { proc: 'Prozedural', project: 'Projekt (assets/textures)', idb: 'Importiert' };
+    for (const g of ['proc', 'project', 'idb'] as const) {
+      const es = textureLibrary()
+        .entries()
+        .filter((e) => e.group === g);
+      if (!es.length) continue;
+      tex.append(h('optgroup', { label: groups[g] }, ...es.map((e) => h('option', { value: e.ref }, e.label))));
+    }
+    if (![...tex.options].some((o) => o.value === l.texture)) tex.append(h('option', { value: l.texture }, `${textureLabel(l.texture)} (fehlt)`));
+    tex.value = l.texture;
+    tex.addEventListener('change', () => editLayer(t, id, 'Layer-Textur', (x) => (x.texture = tex.value)));
+
+    const tint = h('input', { type: 'color', value: l.tint }) as HTMLInputElement;
+    tint.addEventListener('input', () => editLayer(t, id, 'Layer-Farbton', (x) => (x.tint = tint.value), true));
+    tint.addEventListener('change', () => editLayer(t, id, 'Layer-Farbton', (x) => (x.tint = tint.value)));
+
+    const surf = h('select', {}, ...SURFACE_OPTIONS.map((s) => h('option', { value: s.value }, s.label))) as HTMLSelectElement;
+    surf.value = l.surface;
+    surf.addEventListener('change', () => editLayer(t, id, 'Layer-Oberfläche', (x) => (x.surface = surf.value as SurfaceId)));
+
+    const grass = h('select', {}, h('option', { value: '' }, 'Kein Gras'), ...GRASS_PRESETS.map((g) => h('option', { value: g.id }, g.label))) as HTMLSelectElement;
+    grass.value = GRASS_PRESETS.some((g) => g.id === l.grass.type) ? l.grass.type : '';
+    grass.addEventListener('change', () => {
+      editLayer(t, id, 'Layer-Gras', (x) => (x.grass.type = grass.value));
+      render();
+    });
+
+    const autoOn = h('input', { type: 'checkbox' }) as HTMLInputElement;
+    autoOn.checked = l.auto.on;
+    autoOn.addEventListener('change', () => {
+      editLayer(t, id, autoOn.checked ? 'Auto-Regel an' : 'Auto-Regel aus', (x) => (x.auto.on = autoOn.checked));
+      render();
+    });
+
+    const rows: (HTMLElement | null)[] = [
+      row('Name', name),
+      row('Textur', tex),
+      h('div', { class: 'mode-note dim' }, 'Oder im Content Browser (Ordner „Texturen“) doppelklicken.'),
+      lnum('Kachelgröße (m)', (x) => x.tile, (x, v) => (x.tile = v), 0.25, 0.1, 200),
+      row('Farbton', tint),
+      lnum('Rauheit ×', (x) => x.rough, (x, v) => (x.rough = v), 0.05, 0, 2),
+      lnum('Normalen-Stärke', (x) => x.normal, (x, v) => (x.normal = v), 0.05, 0, 3),
+      row('Oberfläche', surf),
+      row('Gras', grass),
+      l.grass.type ? lnum('Gras-Dichte', (x) => x.grass.density, (x, v) => (x.grass.density = v), 0.05, 0, 1) : null,
+      l.grass.type ? h('div', { class: 'mode-note dim' }, 'Gras wächst automatisch nach Layer-Gewicht (nur nahe der Kamera). Einzelne Stellen ohne Gras: im Foliage-Modus radieren.') : null,
+    ];
+    if (isBase) rows.push(h('div', { class: 'mode-note dim' }, 'Basis-Layer: füllt alles, was nicht gemalt und keiner Auto-Regel zugeordnet ist.'));
+    else {
+      rows.push(row('Auto-Regel', autoOn));
+      if (l.auto.on) {
+        rows.push(
+          anum('Neigung ab (°)', 'slopeMin', 1, 0, 90),
+          anum('Neigung bis (°)', 'slopeMax', 1, 0, 90),
+          anum('Höhe ab (m)', 'heightMin', 1, -10000, 10000),
+          anum('Höhe bis (m)', 'heightMax', 1, -10000, 10000),
+          anum('Krümmung', 'curv', 0.05, -1, 1),
+          anum('Weichheit', 'soft', 0.05, 0, 1),
+          anum('Rand-Rauschen', 'noise', 0.05, 0, 1),
+          h('div', { class: 'mode-note dim' }, 'Neigung 0 / 90 und Höhe ±10000 = keine Grenze. Krümmung: −1 nur Mulden/Täler, +1 nur Kuppen/Grate. Obere Layer liegen über unteren.'),
+        );
+      }
+    }
+    return section(`Layer „${l.name}“`, ...rows);
+  }
 
   // ---------- Loch-Auflösung ----------
 
@@ -863,6 +1192,7 @@ export function createLandscapeMode(ctx: ModeContext): EditorMode {
       );
     }
     if (prefs.tool === 'holes' && t && d) children.push(holeResSection(t, d));
+    if (prefs.tool === 'paint' && t && d) children.push(...layerSections(t, d));
 
     if (prefs.tool === 'flatten') {
       children.push(section('Abflachen', select<FlattenMode>('Richtung', prefs.flattenMode, [['both', 'Anheben und Senken'], ['raise', 'Nur anheben'], ['lower', 'Nur senken']], (v) => (prefs.flattenMode = v))));
@@ -1124,7 +1454,7 @@ export function createLandscapeMode(ctx: ModeContext): EditorMode {
         updateOverlay();
         return true;
       }
-      const m = /^Digit([1-8])$/.exec(e.code);
+      const m = /^Digit([1-9])$/.exec(e.code);
       if (m && !e.shiftKey) {
         setTool(TOOLS[Number(m[1]) - 1].id);
         return true;

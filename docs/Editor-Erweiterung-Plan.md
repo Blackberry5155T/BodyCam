@@ -1,6 +1,6 @@
 # Editor-Erweiterung nach UE5-Vorbild — Umsetzungsplan
 
-Stand: 04.11.2026 · Status: **freigegeben (E1–E4 entschieden), Phase 0 und 1 umgesetzt, wartet auf Rückmeldung zu Phase 1**
+Stand: 04.11.2026 · Status: **freigegeben (E1–E4 entschieden), Phase 0–2 umgesetzt, wartet auf Rückmeldung zu Phase 2**
 
 Dieser Plan erweitert den Map-Editor (`editor.html`) um Werkzeuge aus der Unreal Engine 5: Landscape, Foliage,
 Splines, Geometry-Brushes, Wasser mit Physik, Prefabs und neue Script-Blöcke. Er baut auf dem bestehenden Code auf
@@ -175,6 +175,33 @@ wie in UE5: Größe (Komponenten × Komponenten), Quad-Größe (0,25–4 m), Mat
 - **Anti-Kachel-Effekt:** Stochastic Sampling (Hex-Tiling) + großflächige Makro-Variation (Helligkeit/Farbe per Noise).
 - **Wetter:** gleiche `onBeforeCompile`-Erweiterung wie heute für Böden (Nässe, Pfützen, Schnee), siehe 3.8.
 
+> **Umgesetzt (Phase 2, 04.11.2026):** Code in `world/landscape/` (`layers.ts`, `paint.ts`, `textures.ts`,
+> `textureFiles.ts`, Shader in `render.ts`), `world/surfaces.ts`, `audio/footsteps.ts`, Panel in `editor/modes/landscape.ts`.
+> - **Textur-Sets:** prozedural (Gras, Erde, Fels, Kies, Sand, Schnee, Asphalt, Schlamm …), Projekt-Ordner unter
+>   `public/assets/textures/<Name>/` (Vite-Plugin, HMR) und Import in IndexedDB. Dateien werden am Namen erkannt
+>   (Poly Haven/ambientCG/Quixel, auch `arm`-Pakete und DirectX-Normalen). Jedes Set wird auf drei Bilder gebracht:
+>   Albedo (sRGB), Normale (RG), ARM (Rauheit, AO, Höhe). Fehlt die Höhe, wird sie aus der Albedo-Helligkeit geschätzt.
+> - **GPU:** drei `DataArrayTexture`s mit je 8 Schichten (= 3 Sampler für alle Layer) plus eine Splatmap
+>   SW × 2·SH (RGBA, oben Kanäle 0–3, unten 4–7; ab 4096 Gitterpunkten je Seite halbe Auflösung).
+>   Je Pixel nur die *K* stärksten Layer (K = 2 bzw. 3 bei Terrain-Detail Ultra); Texturgröße 512/1024 px nach Detailstufe.
+> - **Auto-Material:** Regeln je Layer (Neigung, Höhe, Krümmung Mulde/Kuppe, weicher Rand, Rausch-Rand); werden im
+>   Shader und identisch in JS (`layerWeights`, für Oberfläche/Export) ausgewertet. Gemaltes verdrängt Auto anteilig
+>   (Summe ≤ 255, Rest = Auto). Standard: Gras (Basis), Erde an mittleren Hängen, Fels ab 36°, Kies (nur gemalt).
+> - **Shader:** Höhen-Blending über den ARM-Höhenkanal, Hex-Tiling (Mikkelsen) in der Nähe, in der Ferne zwei
+>   Abtastungen in verschiedenen Maßstäben + Makro-Variation per Noise. Triplanar nur dort, wo die Seitengewichte > 0
+>   sind (steile Hänge), mit Whiteout-Normalen. Wetter-Patch nutzt die Material-Normale, Porosität und
+>   Pfützen-Neigung je Oberfläche (Kies versickert, Erde sammelt).
+> - **Malen:** Werkzeug 9, Modi Malen/Radieren/Auf Auto zurücksetzen, Undo über Delta-Kacheln wie die Höhen.
+>   Gewichtsmasken als ZIP (eine 8-Bit-PNG je Layer, effektive Gewichte inkl. Auto) und Import (PNG/ZIP, Name = Layer,
+>   bilinear umgerechnet).
+> - **Spiel:** `surfaceAtWorld()` liefert die Oberfläche unter den Füßen, `landscapeSurfaceOf()` am Treffer;
+>   das Wetter macht aus nasser Erde Schlamm und bei Schneedecke Schnee. Schritte werden per WebAudio synthetisiert
+>   (Ferse, gefiltertes Rauschen, Knirschen, Schmatzen; leiser beim Schleichen, eigener Klang bei Landungen).
+>   Einschläge: Funken nur auf harten Böden, Brocken- und Staubfarbe/-menge je Oberfläche. Alles außerhalb von
+>   Landscapes zählt vorerst als Beton (Oberflächen für Meshes/Materialien kommen mit Phase 5).
+> - Gemessen (Headless Edge, D3D11, 1080p, 1 km² mit 4 Layern): Editor ~700 FPS, Spiel ~440 FPS — das Terrain liegt
+>   damit klar unter dem Budget von 2,5 ms. Messung mit eigenen Foto-Texturen auf der RX 7800 XT steht noch aus.
+
 ### 3.3 Foliage
 
 **Foliage-Typen** (Content Browser › *Foliage*): Verweis auf ein .glb-Modell (bis zu 3 LOD-Stufen + optional Impostor)
@@ -199,6 +226,34 @@ Sichtblockade (für Büsche), Wind-Stärke. Ohne Modell: einfache prozedurale Pl
   aber die Sicht (für spätere KI relevant, Flag im Foliage-Typ).
 - **Zerstörung:** Instanzen sind einzeln adressierbar (Typ + Index), damit Scripts/Explosionen sie entfernen können.
 
+> **Umgesetzt (Phase 3, 04.11.2026):** Code in `world/foliage/` (`types.ts`, `data.ts`, `meshes.ts`, `render.ts`,
+> `grass.ts`, `asset.ts`), Modus `editor/modes/foliage.ts`, Grafikoptionen in `core/settings.ts` + Terminal.
+> - **Daten:** ein Foliage-Objekt je Map (wird beim ersten Typ angelegt). Typen als JSON, Instanzen als Blob
+>   (je Typ und 64-m-Zelle ein `Float32Array`: Position, Gierwinkel, Skalierung, Ausrichtung). Undo nur über die
+>   geänderten Zellen.
+> - **Typen:** Platzhalter (Laubbaum, Nadelbaum, Busch, Fels, Grasbüschel) oder glb mit `LOD0/1/2` im Knotennamen.
+>   Einstellungen wie oben, Kollision *keine/Stamm/voll*, Sichtschutz als Flag, Oberfläche für Treffer-Effekte.
+> - **Werkzeuge:** Malen, Radieren, Auswählen (Klick/Pinsel, Löschen), Neu anwenden (Höhe, Ausrichtung, Skalierung,
+>   Filter), Füllen (alle Landscapes, im Hintergrund mit 12 ms je Frame, abbrechbar). Malen auf Meshes per
+>   Raycast nach unten (three-Raycaster, ohne BVH).
+> - **Laufzeit:** je Typ ein `InstancedMesh` je LOD-Stufe plus Impostoren (Atlas mit 8 Blickwinkeln + Normalen, beim
+>   Laden gebacken). Puffer werden nur nach Kamerabewegung (2 m nah / 12 m fern) oder Datenänderung neu gefüllt;
+>   Distanz-Culling über Zellen und Instanzen, kein Sichtfeld-Culling (Kamera drehen füllt nichts neu).
+>   Wind im Vertex-Shader (auch im Schatten).
+> - **Layer-Gras radieren:** Gras-Maske je Landscape (eine Ebene in Splatmap-Auflösung, 0 = Gras, 255 = entfernt),
+>   Blob in `props.grass` (nur wenn etwas radiert ist). Foliage-Pinsel radiert/stellt wieder her, eigener Undo-Schritt
+>   zusammen mit den Instanzen.
+> - **Layer-Gras:** Gras-Art und -Dichte je Landscape-Layer, Kacheln à 16 m um die Kamera, Dichte aus dem
+>   Layer-Gewicht, Wind + Ausweichen für Spieler und bis zu 8 NPCs (Uniform-Liste statt Biege-Textur).
+> - **Kollision:** Zylinder für Stamm/voll, Sichtschutz-Zylinder für Kronen/Büsche; nur Instanzen im Umkreis von
+>   80 m um den Spieler werden zu Rapier-Collidern.
+> - **Grafik:** *Foliage-Dichte* (dünnt nur Deko ohne Kollision/Sichtschutz aus), *Foliage-Weite* (Faktor auf LOD- und
+>   Sichtweiten), *Gras* an/aus; in den Qualitätsstufen enthalten.
+> - Gemessen (Headless Edge, D3D11, 1080p, 4 × 4 km mit 154 000 Bäumen + 462 000 Büschen + Layer-Gras):
+>   Spiel 2,90 ms je Frame gegenüber 1,92 ms ohne Foliage, also ~1 ms für Foliage (Budget 4 ms). Füllen dauerte 0,3 s.
+> - **Noch offen:** Instanzen verschieben (Auswählen kann nur löschen), Instanzen auf Objekten bewegen sich nicht mit
+>   dem Objekt, Zerstörung per Script, Füllen nur auf Landscapes.
+
 ### 3.4 Splines
 
 **Objekt:** `spline` mit Kontrollpunkten (Position, Tangente, Breite, Roll). Bearbeitung im Splines-Modus:
@@ -215,6 +270,32 @@ Klick = Punkt anhängen, Alt+Ziehen an einem Punkt = neuen Punkt einfügen (wie 
   optional an Objekte gebunden (Masten bewegen → Kabel folgt).
 - **Fluss:** erzeugt einen Wasser-Körper (3.6) mit Fließrichtung entlang der Kurve, gräbt ein Flussbett ins Terrain
   (Tiefe/Breite pro Punkt) und malt Ufer-Layer.
+
+> **Umgesetzt (Phase 4, 05.11.2026):** Code in `world/splines/` (`curve.ts`, `geometry.ts`, `deform.ts`, `zones.ts`,
+> `asset.ts`), Strommast in `world/props/powerpole.ts`, Modus `editor/modes/splines.ts`.
+> - **Objekte:** statt eines `spline`-Typs mit Untertypen drei Asset-Typen: `road` (Straße/Weg), `splinemesh`
+>   (Leitplanke, Maschendrahtzaun, Mauer, 3D-Modell entlang der Kurve) und `cable` (Kabel mit Durchhang, Rohr).
+>   Punkte als JSON in `props.points` (lokal zur Objektposition; je Punkt Position, optional Tangente, Breitenfaktor,
+>   Querneigung, Anbindung). Die Objekte haben keine Drehung/Skalierung, Verschieben mit dem Gizmo bewegt die
+>   ganze Spline.
+> - **Kurve:** kubisch Hermite, Tangenten automatisch (Catmull-Rom), gleichmäßig nach Bogenlänge abgetastet;
+>   Kabel hängen geradlinig mit parabelförmigem Durchhang (% der Spannweite) zwischen den Punkten.
+> - **Bearbeiten (Modus Umschalt+5):** Vorlage wählen → Punkte klicken (folgen dem Gelände), Enter/Esc beendet.
+>   Punkt ziehen, Umschalt+Ziehen = Höhe, Klick auf die Kurve = Punkt einfügen, Strg+Klick = Punkt anhängen,
+>   Entf = Punkt löschen. Panel: Umkehren, *Aufs Gelände*, Position/Breite/Querneigung je Punkt.
+> - **Straße:** Band-Mesh mit Belag-Textur (Asphalt, Kies, Erde, Sand, Schlamm), Mittel-/Randlinien, Bordsteine,
+>   Trimesh-Kollision. Formt das Gelände nicht-destruktiv: die Landscape hält im Editor die gemalten Höhen
+>   (`props.heightBase`) getrennt, Straßen legen eine Verformung mit Böschung darüber (neu gerechnet, sobald die
+>   Straße sich ändert; Straße löschen = altes Gelände zurück). Gespeichert wird das fertige Gelände, das Spiel rechnet
+>   nichts. Sculpt-Werkzeuge malen in die Basis-Höhen. Layer-Gras wächst nicht auf der Straße; Schritte und
+>   Einschläge nehmen den Belag der Straße.
+> - **Spline-Mesh:** Leitplanke (W-Profil + Pfosten als `InstancedMesh`), Zaun (Pfosten, Rohr, Maschendraht mit
+>   Alpha-Test), Mauer (Material wählbar), glb-Modell wird entlang der Kurve verbogen. Kollision als Trimesh.
+> - **Kabel/Rohr:** Röhren-Mesh mit Radius; Kabel-Punkte, die auf einen Strommast geklickt werden, rasten am
+>   Isolator ein (bis 1,5 m) und folgen dem Mast beim Verschieben/Drehen. Neues Asset *Strommast* (Props) mit
+>   Höhe, Material, ein/zwei Querträgern oder ohne (Telefonmast).
+> - **Noch offen:** keine Tangenten-Griffe (nur automatisch), Querneigung wirkt nicht auf die Gelände-Verformung,
+>   kein Layer-Malen durch Straßen, Fluss kommt mit Phase 6 (Wasser).
 
 ### 3.5 Geometry-Brushes (CSG)
 

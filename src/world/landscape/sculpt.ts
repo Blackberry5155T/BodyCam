@@ -60,7 +60,7 @@ function eachVertex(d: LandscapeData, b: Brush, r: Rect, fn: (i: number, ix: num
 export function sculptRaise(d: LandscapeData, b: Brush, r: Rect, dt: number, sign: number): void {
   const radiusM = b.radius * d.quadSize;
   const rate = b.strength * (1.5 + radiusM * 0.25) * dt * sign;
-  const hs = d.heights;
+  const hs = d.editHeights;
   eachVertex(d, b, r, (i, _x, _z, w) => {
     hs[i] += rate * w;
   });
@@ -76,7 +76,7 @@ export function sculptSmooth(d: LandscapeData, b: Brush, r: Rect, dt: number): v
   const w = x1 - x0;
   const h = y1 - y0;
   const sat = new Float64Array((w + 1) * (h + 1));
-  const hs = d.heights;
+  const hs = d.editHeights;
   for (let y = 0; y < h; y++) {
     let row = 0;
     for (let x = 0; x < w; x++) {
@@ -106,7 +106,7 @@ export type FlattenMode = 'both' | 'raise' | 'lower';
 /** Abflachen auf eine Zielhöhe (lokal, m) */
 export function sculptFlatten(d: LandscapeData, b: Brush, r: Rect, dt: number, target: number, mode: FlattenMode): void {
   const amt = Math.min(1, b.strength * dt * 10);
-  const hs = d.heights;
+  const hs = d.editHeights;
   eachVertex(d, b, r, (i, _x, _z, w) => {
     const diff = target - hs[i];
     if ((mode === 'raise' && diff < 0) || (mode === 'lower' && diff > 0)) return;
@@ -163,7 +163,7 @@ export interface NoiseParams {
 export function sculptNoise(d: LandscapeData, b: Brush, r: Rect, dt: number, p: NoiseParams): void {
   const f = d.quadSize / Math.max(0.1, p.scale);
   const rate = b.strength * p.amplitude * dt;
-  const hs = d.heights;
+  const hs = d.editHeights;
   eachVertex(d, b, r, (i, ix, iz, w) => {
     hs[i] += fbm(ix * f, iz * f, p.octaves, p.seed) * rate * w;
   });
@@ -179,11 +179,11 @@ export function sculptErosion(d: LandscapeData, b: Brush, r: Rect, dt: number, k
   const h = r.h;
   if (w < 6 || h < 6) return;
   const src = new Float32Array(w * h);
-  for (let y = 0; y < h; y++) src.set(d.heights.subarray((r.y + y) * d.VW + r.x, (r.y + y) * d.VW + r.x + w), y * w);
+  for (let y = 0; y < h; y++) src.set(d.editHeights.subarray((r.y + y) * d.VW + r.x, (r.y + y) * d.VW + r.x + w), y * w);
   const work = src.slice();
   const k = Math.min(1, b.strength * dt * 6);
   runErosion(work, w, h, d.quadSize, kind, { ...p, droplets: p.droplets * k, thermalIterations: Math.max(1, Math.round(p.thermalIterations * k * 0.5)) }, erosionSeed++);
-  const hs = d.heights;
+  const hs = d.editHeights;
   eachVertex(d, b, r, (i, ix, iz, wt) => {
     const j = (iz - r.y) * w + ix - r.x;
     hs[i] = src[j] + (work[j] - src[j]) * wt;
@@ -245,7 +245,7 @@ export function applyRamp(d: LandscapeData, ramp: Ramp, rect: Rect): void {
   const len2 = Math.max(1e-6, ex * ex + ez * ez);
   const half = ramp.width / 2;
   const outer = half * (1 + ramp.falloff);
-  const hs = d.heights;
+  const hs = d.editHeights;
   for (let iz = rect.y; iz < rect.y + rect.h; iz++) {
     for (let ix = rect.x; ix < rect.x + rect.w; ix++) {
       const px = ix - ramp.ax;
@@ -284,7 +284,7 @@ export interface RegionCopy {
 
 export function copyRegion(d: LandscapeData, r: Rect): RegionCopy {
   const heights = new Float32Array(r.w * r.h);
-  for (let y = 0; y < r.h; y++) heights.set(d.heights.subarray((r.y + y) * d.VW + r.x, (r.y + y) * d.VW + r.x + r.w), y * r.w);
+  for (let y = 0; y < r.h; y++) heights.set(d.editHeights.subarray((r.y + y) * d.VW + r.x, (r.y + y) * d.VW + r.x + r.w), y * r.w);
   const sub = d.holeSub;
   const cw = Math.max(0, r.w - 1) * sub;
   const ch = Math.max(0, r.h - 1) * sub;
@@ -304,7 +304,7 @@ export function pasteRegion(d: LandscapeData, c: RegionCopy, x0: number, y0: num
     for (let x = 0; x < c.w; x++) {
       const ix = x0 + x;
       if (ix < 0 || ix > d.W) continue;
-      d.heights[iz * d.VW + ix] = c.heights[y * c.w + x] + offset;
+      d.editHeights[iz * d.VW + ix] = c.heights[y * c.w + x] + offset;
     }
   }
   if (!withHoles) return;

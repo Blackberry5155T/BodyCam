@@ -257,7 +257,12 @@ const SURFACE_VERTEX = /* glsl */ `
 
 // Nach den Normal-Maps: Albedo/Rauheit/Normalen anpassen
 const SURFACE_FRAGMENT = /* glsl */ `
-  vec3 wN = normalize( vWNrm );
+  // Landscape: Vertex-Normale ist dort immer "oben", die echte Geländenormale kommt aus dem Terrain-Shader
+  #ifdef W_CUSTOM_NORMAL
+    vec3 wN = normalize( W_CUSTOM_NORMAL );
+  #else
+    vec3 wN = normalize( vWNrm );
+  #endif
   #ifdef DOUBLE_SIDED
     wN *= faceDirection;
   #endif
@@ -294,6 +299,10 @@ const SURFACE_FRAGMENT = /* glsl */ `
     }
     if ( wPuddle > 0.001 && wUp > 0.0 ) {
       float n = wFbm( vWPos.xz * 0.32 );
+      #ifdef W_TERRAIN
+        // Layer bestimmen mit: Erde/Mulden sammeln Wasser, Kies/Kuppen kaum
+        n += lsPudBias;
+      #endif
       float th = 0.12 + 0.42 * wPuddle;
       wPud = ( 1.0 - smoothstep( th - 0.035, th, n ) ) * wUp * wExpo;
       // dunkler, nasser Saum um jede Pfütze
@@ -305,6 +314,9 @@ const SURFACE_FRAGMENT = /* glsl */ `
 
     // Nässe: poröse Stoffe dunkeln stark nach, Wasser füllt feine Unebenheiten
     float wPor = 1.0 - metalnessFactor * 0.85;
+    #ifdef W_TERRAIN
+      wPor *= lsPor;
+    #endif
     diffuseColor.rgb *= mix( 1.0, 0.42, wWetAmt * wPor );
     roughnessFactor = mix( roughnessFactor, min( roughnessFactor, 0.28 ), wWetAmt );
     normal = normalize( mix( normal, wGeoN, wWetAmt * 0.45 ) );
@@ -1137,7 +1149,7 @@ export class Weather {
         .replace('#include <common>', `#include <common>\n${SURFACE_PARS}`)
         .replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\nvec3 wGeoN = normal;')
         // Materialien mit eigener Normalen (Landscape) markieren die Stelle statt des Standard-Chunks
-        .replace('/*NORMAL_BEGIN*/', 'vec3 wGeoN = normal;')
+        .replace('/*NORMAL_BEGIN*/', 'vec3 wGeoN = nonPerturbedNormal;')
         .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${SURFACE_FRAGMENT}`)
         .replace('#include <opaque_fragment>', `${REFLECT_FRAGMENT}\n#include <opaque_fragment>`);
     };
