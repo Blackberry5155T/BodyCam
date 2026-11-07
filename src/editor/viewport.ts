@@ -25,6 +25,7 @@ import { updateLandscapes } from '../world/landscape/render.ts';
 import { updateDeforms } from '../world/splines/deform.ts';
 import { setFoliageRenderer, updateFoliage } from '../world/foliage/render.ts';
 import { updateGrass } from '../world/foliage/grass.ts';
+import { onBrushesUpdated, setBrushOrder } from '../world/brushes/manager.ts';
 
 // 3D-Viewport des Editors: Navigation wie in UE5 (RMT + WASD fliegen, MMT schieben, Alt+LMT orbit,
 // Mausrad vor/zurück), Gizmo (W/E/R), Auswahl mit Outline, Drag & Drop aus dem Content Browser.
@@ -215,6 +216,12 @@ export class Viewport {
       this.applyWorld();
       this.fxCollidersDirty = true;
     });
+    // Geometry-Brushes: neue CSG-Ergebnisse → Kollision, Drahtgitter, Auswahl-Umriss nachziehen
+    onBrushesUpdated(() => {
+      this.fxCollidersDirty = true;
+      if (this.viewMode === 'wire') this.setWire(this.mapGroup, true);
+      this.updateSelectionVisuals();
+    });
     state.on('transform', () => {
       this.fxCollidersDirty = true;
       this.updateSelectionVisuals();
@@ -234,6 +241,7 @@ export class Viewport {
   /** Gleicht 3D-Szene mit den Map-Daten ab (nur Geändertes wird neu gebaut) */
   sync(): void {
     const objects = this.state.map.objects;
+    setBrushOrder(objects.map((o) => o.id));
     const ids = new Set(objects.map((o) => o.id));
     for (const [id, e] of this.entries) {
       if (!ids.has(id)) {
@@ -705,7 +713,7 @@ export class Viewport {
       }
     }, { passive: false });
     window.addEventListener('keydown', (e) => {
-      if (e.code === 'KeyL' && (e.ctrlKey || e.metaKey) && !this.runtime && !(e.target as HTMLElement).closest?.('input, select, textarea')) {
+      if (e.code === 'KeyL' && (e.ctrlKey || e.metaKey) && !this.runtime && !this.paused && !(e.target as HTMLElement).closest?.('input, select, textarea')) {
         e.preventDefault(); // sonst springt der Browser in die Adressleiste
         this.setSunAdjust(true);
       }
@@ -1023,7 +1031,26 @@ export class Viewport {
     volumeFX.setColliders(list, this.state.map.world.groundPlane);
   }
 
+  /** Rendern anhalten (z. B. solange der Modeler-Tab offen ist) */
+  private paused = false;
+  setPaused(v: boolean): void {
+    this.paused = v;
+  }
+
+  /** Modell wurde neu gespeichert: alle Objekte, die es benutzen, neu aufbauen */
+  reloadModel(ref: string): void {
+    let hit = false;
+    for (const e of this.entries.values()) {
+      if ((e.node.data.props as Record<string, unknown> | undefined)?.model === ref) {
+        e.propsKey = '';
+        hit = true;
+      }
+    }
+    if (hit) this.sync();
+  }
+
   private frameLoop(): void {
+    if (this.paused) return;
     this.timer.update();
     const rawDt = this.timer.getDelta();
     const dt = Math.min(rawDt, 0.05);

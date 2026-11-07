@@ -35,7 +35,7 @@ Schnee (füllen sich bei Schneefall langsam wieder) und Wellenringe in Pfützen.
 - **Testen:** *Simulieren* (Alt+S) führt Scripts im Editor aus: Kamera = Spieler, Klick = Benutzen, Shift+Klick = Treffer.
   *Spielen* (Alt+P) speichert und öffnet die Map im Spiel (`/?map=local:<Name>`). Erneutes Speichern lädt den Spiel-Tab neu.
 - **Modi:** Knopf links in der Toolbar bzw. Umschalt+1…6 — Auswahl, Landscape, Foliage, Modeling, Splines, Wasser
-  (Plan: `docs/Editor-Erweiterung-Plan.md`; Auswahl, Landscape, Foliage und Splines sind fertig, die übrigen Modi zeigen vorerst nur, was geplant ist).
+  (Plan: `docs/Editor-Erweiterung-Plan.md`; Auswahl, Landscape, Foliage, Modeling und Splines sind fertig, der Wasser-Modus zeigen vorerst nur, was geplant ist).
 - **Landscape** (Modus Umschalt+2, wie UE5): *Neue Landscape…* (Komponenten à 128 Quads, Quad-Größe, optional aus Heightmap)
   oder *Aus Heightmap…* (16-bit PNG oder RAW `.r16`; Min/Max-Höhe im Dialog). Werkzeuge 1–8: Formen (Umschalt = senken),
   Glätten, Abflachen, Rampe (zwei Klicks, Enter), Noise, Erosion (hydraulisch/thermisch; als Pinsel oder im Hintergrund auf
@@ -66,6 +66,40 @@ Schnee (füllen sich bei Schneefall langsam wieder) und Wellenringe in Pfützen.
   Eintrag *Layer-Gras* in der Typenliste schaltet das an/aus, *Zurücksetzen* stellt alles wieder her. Die Gras-Maske
   wird mit der Landscape gespeichert.
   Grafik-Menü: *Foliage-Dichte*, *Foliage-Weite*, *Gras* an/aus.
+- **Modeling** (Modus Umschalt+4, Geometry-Brushes wie BSP in UE): unter *Neu* eine Form wählen (Quader, Wand, Boden,
+  Zylinder, Rampe, Treppe, Kugel, Türloch, Fensterloch, Tunnel) und in die Szene klicken — auf Böden steht der Brush auf
+  der Fläche, an Wänden liegt er an, *Abziehen*-Brushes (Tür, Fenster) sitzen mittig in der Wand (Umschalt = mehrere
+  setzen, Esc bricht ab). Brushes werden in Outliner-Reihenfolge verrechnet: *Addieren* füllt, *Abziehen* schneidet
+  Löcher, *Schnitt* behält nur die Überlappung (*Nach vorn/hinten* ändert die Reihenfolge). Maße = Skalierung in Metern
+  (Gizmo oder Felder), Treppe mit Stufenhöhe, Zylinder/Kugel mit Segmenten. *Hohl* setzt einen Abziehen-Brush mit der
+  eingestellten Wandstärke hinein. Material, Farbe und Textur-Skalierung je Brush und je Fläche (*Flächen im Viewport
+  wählen*: Klick, Umschalt+Klick = weitere). Das Ergebnis rechnet im Hintergrund (Web Worker) nach, nur überlappende
+  Gruppen werden neu verrechnet. Kollision als Trimesh, Dächer halten Regen/Schnee ab. *In statisches Mesh umwandeln*
+  backt die gewählten Brushes (samt überlappender) zu einem Objekt *Statisches Mesh* (Blob in der Map, Strg+Z geht).
+  Tunnel durch Gelände: Brushes durch den Hügel legen und an den Portalen Löcher in die Landscape malen.
+- **3D-Modeler** (eigener Tab neben dem Level, wie ein Asset-Editor in UE5; Polygon-Modeling wie in Blender):
+  öffnen über *Neues Modell* im Content Browser, den **+**-Tab oder *Datei › Neues 3D-Modell*; eigene Modelle per
+  Doppelklick (oder Rechtsklick › *Im Modeler bearbeiten*). Das Level pausiert, solange der Modeler-Tab aktiv ist.
+  **Objektmodus:** Grundkörper hinzufügen (Umschalt+A: Würfel, Ebene, Raster, Kreis, Zylinder, Kegel, UV-/Ico-Kugel, Torus,
+  Parameter im Redo-Panel unten links), verschieben/drehen/skalieren (G/R/S oder Gizmos links, X/Y/Z sperrt
+  die Achse, Zahl tippen = exakter Wert, Strg = Raster), Umschalt+D duplizieren, Strg+J verbinden, Strg+A Transform
+  anwenden, **Boolean** (zwei Objekte wählen, das zuletzt geklickte wird bearbeitet: Abziehen/Vereinigen/Schnitt).
+  **Bearbeitungsmodus** (Tab): 1/2/3 = Punkte/Kanten/Flächen, Klick/Umschalt+Klick/Rahmen, A alles, Alt+A nichts,
+  Strg+I umkehren, Strg+L verbunden, Alt+Z Röntgen. Werkzeuge: **E** Extrudieren, **I** Inset (I im Werkzeug = einzeln),
+  **Strg+B** Abschrägen (Bevel), **Strg+R** Loop Cut (über Kante fahren, klicken; Anzahl/Position im Redo-Panel),
+  F Fläche füllen, M Zusammenführen, Unterteilen, Glätten (Subdivision), Trennen (P), Löschen/Auflösen (X),
+  Spiegeln/Symmetrisieren, Normalen umdrehen/neu berechnen (Umschalt+N). Jede Operation lässt sich direkt danach im
+  Redo-Panel nachjustieren. Ansichten über Ziffernblock (1/3/7, 5 = ortho, Strg = Gegenseite, , = auf Auswahl),
+  Navigation wie Blender (mittlere oder rechte Maus drehen, mit Umschalt verschieben, Rad zoomen) oder mit dem Achsen-Würfel.
+  **Material je Fläche:** Material-Slots (Material aus der Bibliothek, Farbe, Textur-Maßstab, Rauheit/Metall); im
+  Bearbeitungsmodus Flächen wählen und *Zuweisen*. UVs per Box-Projektion (kein UV-Unwrap).
+  **Modell:** Kollision (*Quader (Umriss)*, *Konvexe Hülle*, *Exakt (Dreiecke)*, *Keine*; *Kollision zeigen* als Vorschau) und
+  Ursprung (*Boden-Mitte*, *Mitte*, *Auswahl*) — der Ursprung ist im Level der Drehpunkt.
+  **Speichern** (Strg+S, *Speichern unter* = Umschalt+Strg+S) legt das Modell als .glb im Content Browser unter
+  *Modelle › Eigene* ab (IndexedDB) — Bearbeitungsstand (Polygone, Slots, Einstellungen) steckt im glb, beim erneuten
+  Öffnen geht es also verlustfrei weiter. Platzierte Instanzen aktualisieren sich beim Speichern. *Im Level platzieren*
+  wechselt zum Level und setzt das Modell (Kollision *Wie im Modell*). *Import* übernimmt fremde .glb/.gltf als
+  bearbeitbare Objekte, *Export* lädt das Modell als .glb herunter (auch per Rechtsklick im Content Browser).
 - **Splines** (Modus Umschalt+5): oben eine Vorlage wählen (Straße, Feldweg, Leitplanke, Zaun, Mauer, Modell,
   Stromkabel, Rohr), dann Punkte in den Viewport klicken (sie folgen dem Gelände); Enter oder Esc beendet.
   Bearbeiten: Spline anklicken, Punkt ziehen (Umschalt + Ziehen = Höhe), Klick auf die Kurve fügt einen Punkt ein,
@@ -137,6 +171,7 @@ src/
     blocks.ts             Block-Definitionen + Code-Generator (nur Editor)
     runtime.ts            Führt Objekt-Scripts aus (Spiel + Simulieren im Editor)
   editor/                 Map-Editor: Viewport, Outliner, Details, Content Browser, Script-Fenster
+    modeler/              3D-Modeler-Tab: Polygon-Netz (mesh.ts), Operationen (ops.ts), Boolean, Ansicht, glb-Ein-/Ausgabe
     modes/                Editor-Modi (Auswahl, Landscape, Foliage …) mit eigenem Werkzeug-Panel
     history.ts            Delta-Undo für große Raster (Heightmaps/Splatmaps), kachelweise komprimiert
   physics/

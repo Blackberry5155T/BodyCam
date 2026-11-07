@@ -21,8 +21,12 @@ import { browserBlobs } from '../world/blobStore.ts';
 import { createLandscapeMode } from './modes/landscape.ts';
 import { createFoliageMode } from './modes/foliage.ts';
 import { createSplinesMode, installSplineAttachments } from './modes/splines.ts';
+import { createModelingMode } from './modes/modeling.ts';
 import { clearFoliageCache, flushFoliage } from '../world/foliage/asset.ts';
 import { LoadingScreen } from '../ui/loadingScreen.ts';
+import { models } from './models.ts';
+import { modelLabel } from '../world/modelStore.ts';
+import type { Modeler } from './modeler/modeler.ts';
 
 // Einstieg des Map-Editors (editor.html). Verdrahtet Zustand, Viewport, Panels, Menüs und Tastenkürzel.
 
@@ -80,11 +84,12 @@ initSplitters();
 const modes = new ModeManager({ state, viewport, status: (m, err) => status(m, err) }, document.getElementById('details')!);
 modes.register(createLandscapeMode({ state, viewport, status: (m, err) => status(m, err) }));
 modes.register(createFoliageMode({ state, viewport, status: (m, err) => status(m, err) }));
+modes.register(createModelingMode({ state, viewport, status: (m, err) => status(m, err) }));
 modes.register(createSplinesMode({ state, viewport, status: (m, err) => status(m, err) }));
 // Kabel hängen an Strommasten: Punkte folgen, wenn ein Mast bewegt wird
 installSplineAttachments(state);
 // Entwicklung: Zugriff für automatisierte Tests im Browser
-if (import.meta.env.DEV) (window as unknown as { __editor: unknown }).__editor = { state, viewport, modes };
+if (import.meta.env.DEV) (window as unknown as { __editor: unknown }).__editor = { state, viewport, modes, get modeler() { return modeler; } };
 
 /** Geänderte Landscape- und Foliage-Daten als Blobs schreiben (vor Speichern/Export) */
 async function flushData(): Promise<void> {
@@ -308,6 +313,111 @@ function placePreset(p: AssetPreset): void {
 }
 content.onPlace = placePreset;
 
+// ---------- Dokument-Tabs: Level & Modeler ----------
+// Der Modeler (3D-Modelle bauen) läuft als eigener Tab neben dem Level. Er wird erst beim ersten Öffnen geladen.
+
+const doctabs = document.getElementById('doctabs')!;
+const modelerEl = document.getElementById('modeler')!;
+const toolbarEl = document.getElementById('toolbar')!;
+const workspaceEl = document.getElementById('workspace')!;
+let activeTab: 'level' | 'modeler' = 'level';
+let modeler: Modeler | null = null;
+let modelerOpen = false;
+let modelerTitle = { name: '', dirty: false };
+
+async function ensureModeler(): Promise<Modeler> {
+  if (modeler) return modeler;
+  status('Modeler wird geladen …');
+  const { Modeler } = await import('./modeler/modeler.ts');
+  modelerEl.classList.remove('hidden');
+  modeler = new Modeler(modelerEl, {
+    status,
+    title: (name, dirty) => {
+      modelerTitle = { name, dirty };
+      renderDocTabs();
+    },
+    saved: async (ref) => {
+      await models.refresh();
+      viewport.reloadModel(ref);
+      content.showFolder('Modelle/Eigene');
+    },
+    place: (ref) => {
+      showTab('level');
+      placePreset({ id: `model:${ref}`, label: modelLabel(ref), category: 'Modelle/Eigene', type: 'model', icon: 'modeler', props: { model: ref, collision: 'auto' } });
+    },
+  });
+  return modeler;
+}
+
+function showTab(tab: 'level' | 'modeler'): void {
+  if (tab === 'modeler' && !modeler) return;
+  activeTab = tab;
+  const m = tab === 'modeler';
+  if (m && viewport.simulating) viewport.stopSimulation();
+  toolbarEl.classList.toggle('hidden', m);
+  workspaceEl.classList.toggle('hidden', m);
+  modelerEl.classList.toggle('hidden', !m);
+  viewport.setPaused(m);
+  closeMenus();
+  if (m) modeler!.activate();
+  else modeler?.deactivate();
+  renderDocTabs();
+}
+
+function renderDocTabs(): void {
+  const tab = (id: 'level' | 'modeler', ic: string, label: string, dirty: boolean, close?: () => void) => {
+    const el = h('div', { class: `doctab${activeTab === id ? ' active' : ''}`, title: label, html: icon(ic) }, h('span', { class: 'dt-name' }, label), dirty ? h('span', { class: 'dt-dirty' }, '●') : '');
+    el.addEventListener('click', () => showTab(id));
+    if (close) {
+      const x = h('span', { class: 'dt-close', title: 'Modeler schließen', html: icon('close') });
+      x.addEventListener('click', (e) => {
+        e.stopPropagation();
+        close();
+      });
+      el.append(x);
+    }
+    return el;
+  };
+  doctabs.replaceChildren(tab('level', 'mountain', `Level: ${state.map.name}`, state.dirty));
+  if (modelerOpen) doctabs.append(tab('modeler', 'modeler', `Modell: ${modelerTitle.name}`, modelerTitle.dirty, () => void closeModeler()));
+  const plus = h('div', { class: 'doctab', title: 'Neues 3D-Modell im Modeler', html: icon('plus') });
+  plus.addEventListener('click', () => void newModel());
+  doctabs.append(plus);
+}
+
+async function modelerReady(): Promise<Modeler | null> {
+  if (modelerOpen && modeler?.isDirty && !(await confirmDialog('Ungespeichertes Modell', `„${modeler.name}“ hat ungespeicherte Änderungen. Verwerfen?`, 'Verwerfen', true))) return null;
+  const m = await ensureModeler();
+  modelerOpen = true;
+  return m;
+}
+
+async function newModel(): Promise<void> {
+  const m = await modelerReady();
+  if (!m) return;
+  m.newModel();
+  showTab('modeler');
+  status('Neues Modell — Tab: Bearbeiten · Umschalt+A: Grundkörper · Strg+S: im Content Browser speichern');
+}
+
+async function openModel(ref: string): Promise<void> {
+  if (modelerOpen && modeler?.doc.ref === ref) return showTab('modeler');
+  const m = await modelerReady();
+  if (!m) return;
+  showTab('modeler');
+  await m.open(ref);
+}
+
+async function closeModeler(): Promise<void> {
+  if (modeler?.isDirty && !(await confirmDialog('Modeler schließen', `„${modeler.name}“ hat ungespeicherte Änderungen. Verwerfen?`, 'Verwerfen', true))) return;
+  modelerOpen = false;
+  showTab('level');
+}
+
+content.onOpenModel = (ref) => void openModel(ref);
+content.onNewModel = () => void newModel();
+renderDocTabs();
+
 // Drag & Drop aus dem Content Browser: Vorschau-Objekt folgt der Maus, Loslassen platziert
 let ghost: { id: string; prevSelection: string[] } | null = null;
 viewportEl.addEventListener('dragover', (e) => {
@@ -462,10 +572,31 @@ const menus: Record<string, () => MenuItem[]> = {
     { label: 'Importieren (.bcmap/.json)…', icon: 'upload', action: () => void importFile() },
     { separator: true },
     { label: 'Im Spiel testen', key: 'Alt+P', icon: 'play', action: () => void play() },
+    { separator: true },
+    { label: 'Neues 3D-Modell (Modeler)', icon: 'modeler', action: () => void newModel() },
+    {
+      label: '3D-Modell bearbeiten …',
+      icon: 'modeler',
+      action: () => {
+        const own = models.imported.filter((r) => r.startsWith('idb:modeler/'));
+        if (!own.length) return toast('Noch keine eigenen Modelle — „Neues 3D-Modell“ legt eins an');
+        showMenu(
+          own.map((r) => ({ label: modelLabel(r), icon: 'modeler', action: () => void openModel(r) })),
+          { x: 120, y: 60 },
+        );
+      },
+    },
   ],
   Bearbeiten: () => [
-    { label: 'Rückgängig', key: 'Strg+Z', disabled: !state.canUndo, action: () => state.undo() },
-    { label: 'Wiederholen', key: 'Strg+Y', disabled: !state.canRedo, action: () => state.redo() },
+    ...(activeTab === 'modeler' && modeler
+      ? [
+          { label: 'Rückgängig (Modell)', key: 'Strg+Z', action: () => modeler!.undo() },
+          { label: 'Wiederholen (Modell)', key: 'Strg+Y', action: () => modeler!.redo() },
+        ]
+      : [
+          { label: 'Rückgängig', key: 'Strg+Z', disabled: !state.canUndo, action: () => state.undo() },
+          { label: 'Wiederholen', key: 'Strg+Y', disabled: !state.canRedo, action: () => state.redo() },
+        ]),
     { separator: true },
     ...contextItems().slice(4),
     { separator: true },
@@ -679,6 +810,7 @@ state.on('meta', () => {
   document.title = `${state.dirty ? '* ' : ''}${state.map.name} — BodyCam Map-Editor`;
   statusDirty.textContent = state.dirty ? '● Ungespeichert' : '';
   updateToolbar();
+  renderDocTabs();
 });
 const updateCount = () => {
   const scripts = state.map.objects.filter((o) => o.script?.code).length;
@@ -686,7 +818,7 @@ const updateCount = () => {
 };
 state.on('scene', updateCount);
 window.addEventListener('beforeunload', (e) => {
-  if (state.dirty) e.preventDefault();
+  if (state.dirty || (modelerOpen && modeler?.isDirty)) e.preventDefault();
 });
 
 // ---------- Tastenkürzel ----------
@@ -746,6 +878,7 @@ window.addEventListener('keydown', (e) => {
   const t = e.target as HTMLElement;
   if (scriptEditor.isOpen || screenEditor.isOpen || document.querySelector('.modal-back:not(.hidden)')) return;
   if (t.closest('input, select, textarea, .blocklyWidgetDiv')) return;
+  if (activeTab === 'modeler') return; // der Modeler hat eigene Tastenkürzel
   const ctrl = e.ctrlKey || e.metaKey;
   const key = e.code;
   const run = (fn: () => void) => {

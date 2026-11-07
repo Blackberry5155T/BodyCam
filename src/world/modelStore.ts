@@ -2,10 +2,12 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
 import projectModels from 'virtual:bodycam-models';
+import { getMaterial } from './materials.ts';
 
 // 3D-Modelle für Maps:
 //  - Projekt-Modelle: Dateien in public/assets/models/ (Liste kommt vom Vite-Plugin), Referenz = "/assets/models/x.glb"
 //  - Importierte Modelle: im Editor hochgeladen, liegen in IndexedDB dieses Browsers, Referenz = "idb:<name>"
+//  - Eigene Modelle aus dem Modeler: ebenfalls IndexedDB, Referenz = "idb:modeler/<Name>.glb"
 
 export const PROJECT_MODELS: string[] = projectModels;
 
@@ -51,7 +53,44 @@ export async function importModelFile(file: File): Promise<string> {
 
 export async function deleteImportedModel(ref: string): Promise<void> {
   await tx('readwrite', (s) => s.delete(ref.slice(4)));
+  invalidateModel(ref);
+}
+
+/** Präfix der im Modeler erstellten Modelle */
+export const MODELER_PREFIX = 'idb:modeler/';
+
+export const isModelerRef = (ref: string): boolean => ref.startsWith(MODELER_PREFIX);
+
+/** Modell (glb) unter einem Schlüssel speichern, z. B. "modeler/Kiste.glb"; liefert die Referenz */
+export async function putModel(key: string, blob: Blob): Promise<string> {
+  await tx('readwrite', (s) => s.put(blob, key));
+  const ref = `idb:${key}`;
+  invalidateModel(ref);
+  return ref;
+}
+
+/** Rohdaten eines Modells (glb) holen */
+export async function getModelBlob(ref: string): Promise<Blob | null> {
+  if (ref.startsWith('idb:')) return (await tx<Blob | undefined>('readonly', (s) => s.get(ref.slice(4)))) ?? null;
+  try {
+    const res = await fetch(ref);
+    return res.ok ? await res.blob() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Zwischenspeicher eines Modells verwerfen (nach dem Überschreiben) */
+export function invalidateModel(ref: string): void {
   cache.delete(ref);
+  const url = blobUrls.get(ref);
+  if (url) URL.revokeObjectURL(url);
+  blobUrls.delete(ref);
+}
+
+/** Kollision, die im Modeler für das Modell festgelegt wurde (an der Wurzel des geladenen Modells) */
+export function modelCollision(root: THREE.Object3D): string | undefined {
+  return root.userData.bodycamCollision as string | undefined;
 }
 
 export function modelLabel(ref: string): string {
@@ -83,10 +122,24 @@ export async function loadModel(ref: string): Promise<THREE.Object3D | null> {
       if (!url) return null;
       const gltf = await loader.loadAsync(url);
       gltf.scene.traverse((o) => {
+        // Modeler-Daten: Bearbeitungsstand weglassen (groß, wird beim Klonen kopiert), Kollision behalten
+        const bc = o.userData.bodycam as { collision?: string } | undefined;
+        if (bc) {
+          if (bc.collision) gltf.scene.userData.bodycamCollision = bc.collision;
+          delete o.userData.bodycam;
+        }
         const m = o as THREE.Mesh;
         if (m.isMesh) {
           m.castShadow = true;
           m.receiveShadow = true;
+          // Modeler-Materialien durch die echten (texturierten) Level-Materialien ersetzen
+          const swap = (mat: THREE.Material) => {
+            const d = mat.userData?.bcMat as { material: string; color: string; roughness?: number; metalness?: number } | undefined;
+            if (!d) return mat;
+            mat.dispose();
+            return getMaterial({ material: d.material, color: d.color, roughness: d.roughness, metalness: d.metalness });
+          };
+          m.material = Array.isArray(m.material) ? m.material.map(swap) : swap(m.material);
         }
       });
       return gltf.scene;

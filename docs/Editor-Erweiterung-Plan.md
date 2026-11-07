@@ -1,6 +1,6 @@
 # Editor-Erweiterung nach UE5-Vorbild — Umsetzungsplan
 
-Stand: 04.11.2026 · Status: **freigegeben (E1–E4 entschieden), Phase 0–2 umgesetzt, wartet auf Rückmeldung zu Phase 2**
+Stand: 06.11.2026 · Status: **freigegeben (E1–E4 entschieden), Phase 0–5 und 5b (3D-Modeler) umgesetzt, wartet auf Rückmeldung zu Phase 5b**
 
 Dieser Plan erweitert den Map-Editor (`editor.html`) um Werkzeuge aus der Unreal Engine 5: Landscape, Foliage,
 Splines, Geometry-Brushes, Wasser mit Physik, Prefabs und neue Script-Blöcke. Er baut auf dem bestehenden Code auf
@@ -307,6 +307,62 @@ Klick = Punkt anhängen, Alt+Ziehen an einem Punkt = neuen Punkt einfügen (wie 
 - Kollision: Trimesh-Collider über Rapier (nur mit E1 sinnvoll, sonst grobe Box-Zerlegung).
 - Wetter: Regen-/Schnee-Verdeckung (Dächer) funktioniert wie bei normalen Objekten.
 
+> **Umgesetzt (Phase 5, 06.11.2026):** Code in `world/brushes/` (`shapes.ts`, `csg.ts`, `csg.worker.ts`, `manager.ts`,
+> `asset.ts`), Modus `editor/modes/modeling.ts`.
+> - **Objekte:** `brush` (Form Quader/Zylinder/Keil/Treppe/Kugel, Modus Addieren/Abziehen/**Schnitt**, Segmente,
+>   Stufenhöhe, Material/Farbe/Rauheit/Metall/Textur-Skalierung, Flächen-Materialien als JSON in `props.faces`,
+>   Schatten, Kollision). Maße = Objekt-Skalierung (Einheitsform 1 × 1 × 1). Neues Objekt `staticmesh` für gebackene
+>   Geometrie (Dreiecke als Blob, Teile je Material in `props.parts`).
+> - **Verrechnung:** `manager.ts` teilt die Brushes in Gruppen überlappender Hüllen („Cluster“) und schickt nur geänderte
+>   Cluster an den Worker (`three-bvh-csg`; ohne Worker im Hauptthread). Ergebnisse werden je Cluster zwischengespeichert
+>   (Rückgängig ist sofort da); Ergebnisse, die während des Ziehens eintreffen, wandern mit dem Brush mit, bis die
+>   aktuelle Lage nachgerechnet ist. Jeder Brush bekommt seinen Anteil am Ergebnis (Addieren: Außenflächen,
+>   Abziehen: Lochflächen) — Auswahl, Picking, Sichtbarkeit, Kollision und Wetter laufen dadurch über die normalen
+>   Objekte. Statt der Drahtgitter-Vorschau zeigt der Editor die Brush-Kanten (blau = Addieren, orange = Abziehen,
+>   lila = Schnitt) und das echte Ergebnis.
+> - **Material:** je Fläche der Form (z. B. Quader: Rechts/Links/Oben/Unten/Vorne/Hinten) eigenes Material, Farbe,
+>   Textur-Skalierung; Welt-UVs per Box-Projektion. Schritte klingen nach dem Material (Holz/Beton).
+> - **Kollision:** Trimesh je Brush (Rapier), gebackene Meshes ebenso. Das Spiel wartet vor dem Spawn auf die
+>   Verrechnung.
+> - **Editor:** Platzieren per Klick (auf Böden stehend, an Wänden anliegend, Abziehen-Brushes mittig in der Wand;
+>   Raster rastet die Unterkante), Ghost-Vorschau, *Hohl* (Wandstärke), *Nach vorn/hinten*, Flächen-Auswahl im
+>   Viewport mit Hervorhebung, *In statisches Mesh umwandeln* (backt den ganzen Cluster, ein Undo-Schritt).
+> - **Getestet:** Bunker aus Brushes (Quader + Hohl + Tür + 2 Fenster): Strahlen gehen durch Tür und Fenster, Wände
+>   blockieren, Spieler läuft im Spiel durch die Tür hinaus; Tunnel durch einen Hügel mit Landscape-Löchern an den
+>   Portalen begehbar; Bake, Undo/Redo, Speichern/Laden ohne Fehler.
+> - **Noch offen:** Landscape wird nicht automatisch von Brushes ausgeschnitten (Löcher von Hand malen), keine
+>   UV-Drehung/-Verschiebung je Fläche. Vertex-Bearbeitung gibt es im 3D-Modeler (3.5b).
+
+### 3.5b 3D-Modeler (Asset-Editor-Tab)
+
+Wunsch (06.11.2026): Modeling wie in Blender/Fusion, in einem eigenen Tab, Ergebnis im Content Browser speichern.
+Entscheidungen: Blender-Stil (Polygon-Modeling), Tab im Editor (wie UE5-Asset-Editoren, Doppelklick öffnet),
+Brushes aus Phase 5 bleiben, Umfang: Kollision & Ursprung, glb Import/Export, Material je Fläche, kein UV-Unwrap.
+
+> **Umgesetzt (Phase 5b, 06.11.2026):** Code in `editor/modeler/` (`mesh.ts` Polygon-Netz mit n-Ecken und Grundkörpern,
+> `ops.ts` Operationen, `boolean.ts`, `build.ts` Dreiecke + Box-UVs, `view.ts` eigene Ansicht, `io.ts` glb,
+> `modeler.ts` Oberfläche/Werkzeuge), Tabs in `editor/main.ts`, Content-Browser-Anbindung in `editor/content.ts`.
+> - **Tabs:** Leiste unter dem Menü (*Level* · *Modell* · **+**). Der Modeler wird erst beim ersten Öffnen geladen
+>   (eigener Chunk); solange er aktiv ist, pausiert der Level-Viewport, Tastenkürzel gehen nur an den Modeler.
+>   Ungespeicherte Änderungen werden beim Schließen/Neu/Verlassen abgefragt.
+> - **Datenmodell:** Modell = Objekte (eigenes Netz + Transform + Glätten) + Material-Slots + Kollision. Netz als
+>   Punkte + n-Ecken (Material-Slot je Fläche); Kanten werden abgeleitet. Undo/Redo als Schnappschüsse des Dokuments
+>   samt Auswahl; jede Operation merkt sich ihre Parameter (Redo-Panel wie in Blender).
+> - **Werkzeuge:** Objektmodus (Grundkörper mit Parametern, G/R/S + Gizmos, Duplizieren, Verbinden, Transform anwenden,
+>   Ursprung, Boolean über `three-bvh-csg` mit anschließendem Verschweißen und Zusammenfassen ebener Dreiecke zu
+>   n-Ecken), Bearbeitungsmodus (Punkt/Kante/Fläche, Rahmen, Extrudieren, Inset, Bevel, Loop Cut mit Vorschau,
+>   Füllen, Zusammenführen, Unterteilen, Catmull-Clark, Trennen, Löschen/Auflösen, Spiegeln/Symmetrisieren, Normalen).
+> - **Speichern:** glb in IndexedDB (`idb:modeler/<Name>.glb`, Ordner *Modelle › Eigene*); der Bearbeitungsstand
+>   liegt in den glb-Extras, Fremd-glb werden beim Öffnen/Import in bearbeitbare Netze umgewandelt. Im Level wird das
+>   Modell wie jedes glb-Modell geladen; Kollision *Wie im Modell* liest die gespeicherte Einstellung (Quader/Konvex/
+>   Exakt/Keine). Speichern lädt platzierte Instanzen neu.
+> - **Getestet (Headless-Browser):** Würfel → Fläche extrudieren (Maus + Redo-Panel), Inset/Extrudieren per Zahl,
+>   Loop Cut, Bevel, Strg+Z/Strg+Y, Material-Slot zuweisen, Zylinder per Boolean abziehen, Kollision Konvex,
+>   Ursprung Boden-Mitte, Speichern → Kachel im Content Browser, *Im Level platzieren* (konvexer Collider aktiv),
+>   Doppelklick öffnet wieder, Neuladen aus IndexedDB und glb-Export verlustfrei; keine Konsolenfehler.
+> - **Noch offen:** kein UV-Unwrap (Box-Projektion), keine Modifikator-Liste (Boolean/Subdivision werden sofort
+>   angewendet), kein Knife-Tool, keine Skelette/Animation.
+
 ### 3.6 Wasser
 
 **Wasser-Körper** (Modus *Wasser* / Content Browser): **See** (Fläche aus Umriss-Spline), **Meer** (unendliche Fläche mit
@@ -401,6 +457,7 @@ Aufwand als grobe Größe (S < M < L < XL).
 | 3 | **Foliage** | Foliage-Typen, Pinsel, Malen auf Meshes, Layer-Gras, Wind + Biegen, Kollision, Impostors | Wald mit 100 000+ Bäumen und dichtem Gras im Budget | XL |
 | 4 | **Splines** | Spline-Editor, Straße (Terrain formen), Mesh entlang Spline, Kabel/Rohre | Straße über Hügel, Leitplanke mit Kollision, Stromleitung zwischen Masten | L |
 | 5 | **Brushes** | CSG-Brushes, Materialien, Bake, Trimesh-Kollision | Bunker mit Fenster-/Türlöchern aus Brushes, begehbar, Tunnel durch Landscape-Loch | M |
+| 5b | **3D-Modeler** | Asset-Editor-Tab, Polygon-Modeling (Blender-Stil), Material je Fläche, Kollision/Ursprung, glb Import/Export | Kiste mit Loch modelliert, im Content Browser gespeichert, im Level platziert und begehbar/kollidierend | L |
 | 6 | **Wasser** | See/Meer/Fluss, Darstellung, Wellensim, Spieler im Wasser, Physik-Props + Auftrieb | Fluss mit Strömung, treibende Fässer, Waten/Schwimmen/Tauchen | XL |
 | 7 | **Fluid-Bake** | Fluid-Volumen, FLIP-Worker, VAT-Speicher, Abspielen | „Raum läuft voll“ als Script-Ereignis abspielbar | L |
 | 8 | **Prefabs** | Speichern, Instanzen, Overrides, In-Place-Bearbeitung | Haus-Prefab 10× platziert, einmal geändert → alle aktualisiert | M |

@@ -1,7 +1,7 @@
 import { CATEGORIES, PRESETS, type AssetPreset } from '../world/assets.ts';
-import { modelLabel } from '../world/modelStore.ts';
+import { MODELER_PREFIX, getModelBlob, modelLabel } from '../world/modelStore.ts';
 import { CATEGORY_COLORS, icon } from './icons.ts';
-import { confirmDialog, h, pickFile, pickFiles, toast } from './ui.ts';
+import { confirmDialog, h, pickFile, pickFiles, showMenu, toast, type MenuItem } from './ui.ts';
 import { models } from './models.ts';
 import { textureLabel, textureLibrary, type TextureEntry } from '../world/landscape/textures.ts';
 
@@ -26,6 +26,10 @@ export class ContentBrowser {
   /** Gerade gezogenes Asset (dataTransfer ist während dragover nicht lesbar) */
   static dragging: AssetPreset | null = null;
   onPlace?: (preset: AssetPreset) => void;
+  /** Modell im Modeler-Tab öffnen */
+  onOpenModel?: (ref: string) => void;
+  /** Neues Modell im Modeler-Tab anlegen */
+  onNewModel?: () => void;
 
   constructor(root: HTMLElement) {
     this.search = h('input', { class: 'search', type: 'text', placeholder: 'Assets durchsuchen…', spellcheck: 'false', style: 'max-width:280px' });
@@ -33,12 +37,14 @@ export class ContentBrowser {
     this.search.addEventListener('keydown', (e) => e.stopPropagation());
     const importBtn = h('button', { class: 'btn', html: `${icon('upload')}Importieren`, title: '.glb-Modell oder (im Ordner Texturen) ein Textur-Set importieren' });
     importBtn.addEventListener('click', () => (this.folder.startsWith('Texturen') ? void this.importTextures() : void this.importModel()));
+    const newModelBtn = h('button', { class: 'btn', html: `${icon('modeler')}Neues Modell`, title: 'Eigenes 3D-Modell im Modeler-Tab bauen (wie in Blender)' });
+    newModelBtn.addEventListener('click', () => this.onNewModel?.());
     this.path = h('span', { style: 'color:var(--text-dim);margin-left:8px' });
     this.tree = h('div', { class: 'content-tree' });
     this.grid = h('div', { class: 'content-grid' });
     root.append(
       h('div', { class: 'panel-tabs' }, h('div', { class: 'panel-tab active', html: `${icon('folder')}Content Browser` })),
-      h('div', { class: 'panel-toolbar' }, importBtn, this.path, h('div', { class: 'tb-spacer' }), this.search),
+      h('div', { class: 'panel-toolbar' }, importBtn, newModelBtn, this.path, h('div', { class: 'tb-spacer' }), this.search),
       h('div', { class: 'content-main' }, this.tree, this.grid),
     );
     models.onChange(() => this.render());
@@ -58,10 +64,11 @@ export class ContentBrowser {
       (ref): AssetPreset => ({
         id: `model:${ref}`,
         label: modelLabel(ref),
-        category: ref.startsWith('idb:') ? 'Modelle/Importiert' : 'Modelle/Projekt',
+        category: ref.startsWith(MODELER_PREFIX) ? 'Modelle/Eigene' : ref.startsWith('idb:') ? 'Modelle/Importiert' : 'Modelle/Projekt',
         type: 'model',
-        icon: 'model',
-        props: { model: ref },
+        icon: ref.startsWith(MODELER_PREFIX) ? 'modeler' : 'model',
+        // eigene Modelle bringen ihre Kollision aus dem Modeler mit
+        props: ref.startsWith(MODELER_PREFIX) ? { model: ref, collision: 'auto' } : { model: ref },
       }),
     );
     return [...PRESETS, ...modelPresets];
@@ -80,7 +87,7 @@ export class ContentBrowser {
     };
     this.tree.replaceChildren(
       item('Alle', 'Alle Assets'),
-      ...CATEGORIES.flatMap((c) => (c === 'Modelle' ? [item(c, c), item('Modelle/Projekt', 'Projekt', true), item('Modelle/Importiert', 'Importiert', true)] : [item(c, c)])),
+      ...CATEGORIES.flatMap((c) => (c === 'Modelle' ? [item(c, c), item('Modelle/Eigene', 'Eigene', true), item('Modelle/Projekt', 'Projekt', true), item('Modelle/Importiert', 'Importiert', true)] : [item(c, c)])),
       item('Texturen', 'Texturen'),
       item('Texturen/Prozedural', 'Prozedural', true),
       item('Texturen/Projekt', 'Projekt', true),
@@ -150,7 +157,10 @@ export class ContentBrowser {
           h('div', { class: 'bar', style: `background:${color}` }),
           h('div', { class: 'label' }, p.label),
         );
-        if (p.category === 'Modelle/Importiert') {
+        const own = p.category === 'Modelle/Eigene';
+        if (own) tile.title = `${p.label}
+Doppelklick: im Modeler bearbeiten · Ziehen: im Level platzieren · Rechtsklick: mehr`;
+        if (p.category === 'Modelle/Importiert' || own) {
           const del = h('div', { class: 'del', title: 'Aus dem Browser löschen', html: icon('trash', 'width="12" height="12"') });
           del.addEventListener('click', async (e) => {
             e.stopPropagation();
@@ -166,16 +176,66 @@ export class ContentBrowser {
           e.dataTransfer!.effectAllowed = 'copy';
         });
         tile.addEventListener('dragend', () => (ContentBrowser.dragging = null));
-        tile.addEventListener('dblclick', () => this.onPlace?.(p));
+        tile.addEventListener('dblclick', () => (own ? this.onOpenModel?.(String(p.props?.model)) : this.onPlace?.(p)));
+        if (p.type === 'model') {
+          tile.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            showMenu(this.modelMenu(p), { x: e.clientX, y: e.clientY });
+          });
+        }
         return tile;
       }),
     );
     if (!list.length) {
       const hint = this.folder.startsWith('Modelle')
-        ? 'Keine Modelle. Lege .glb-Dateien nach public/assets/models/ oder klicke „Importieren“.'
+        ? this.folder === 'Modelle/Eigene'
+          ? 'Noch keine eigenen Modelle. Klicke „Neues Modell“, um eins im Modeler zu bauen.'
+          : 'Keine Modelle. Lege .glb-Dateien nach public/assets/models/ oder klicke „Importieren“.'
         : 'Keine passenden Assets.';
       this.grid.append(h('div', { class: 'empty-hint', style: 'grid-column:1/-1' }, hint));
     }
+  }
+
+  private modelMenu(p: AssetPreset): MenuItem[] {
+    const ref = String(p.props?.model);
+    const own = ref.startsWith(MODELER_PREFIX);
+    const items: MenuItem[] = [
+      { heading: p.label },
+      { label: own ? 'Im Modeler bearbeiten' : 'Im Modeler öffnen (als Kopie)', icon: 'modeler', action: () => this.onOpenModel?.(ref) },
+      { label: 'Im Level platzieren', icon: 'levelPlace', action: () => this.onPlace?.(p) },
+      {
+        label: 'Als .glb herunterladen',
+        icon: 'download',
+        action: async () => {
+          const blob = await getModelBlob(ref);
+          if (!blob) return toast('Modell nicht gefunden', 'error');
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = `${p.label}.glb`;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+        },
+      },
+    ];
+    if (ref.startsWith('idb:')) {
+      items.push(
+        { separator: true },
+        {
+          label: 'Löschen',
+          icon: 'trash',
+          action: async () => {
+            if (await confirmDialog('Modell löschen', `„${p.label}“ aus dem Browser-Speicher löschen? Objekte, die es verwenden, zeigen dann nur noch einen Platzhalter.`, 'Löschen', true)) await models.remove(ref);
+          },
+        },
+      );
+    }
+    return items;
+  }
+
+  /** Ordner wechseln (z. B. nach dem Speichern im Modeler) */
+  showFolder(f: Folder): void {
+    this.folder = f;
+    this.render();
   }
 
   private async importTextures(): Promise<void> {

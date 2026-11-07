@@ -3,12 +3,14 @@ import type { MapObjectData, PropValue, Vec3 } from './mapFormat.ts';
 import { MATERIAL_OPTIONS, getMaterial } from './materials.ts';
 import { createDust, createFogVolume, createLightCone, volumeFX } from './volumetrics.ts';
 import { createFire, createSmoke, createSparks, type EffectControl, type Effect } from './particles.ts';
-import { loadModel } from './modelStore.ts';
+import { loadModel, modelCollision } from './modelStore.ts';
+import { ConvexHull } from 'three/examples/jsm/math/ConvexHull.js';
 import { setupLightShadow } from './lightShadow.ts';
 import { SCALE, type Collider } from './collision.ts';
 import { LANDSCAPE_ASSET, LANDSCAPE_TYPE } from './landscape/asset.ts';
 import { FOLIAGE_ASSET, FOLIAGE_TYPE } from './foliage/asset.ts';
 import { SPLINE_ASSETS } from './splines/asset.ts';
+import { BRUSH_ASSETS, BRUSH_PRESETS, BRUSH_TYPE } from './brushes/asset.ts';
 import { POWERPOLE_ASSET, POWERPOLE_TYPE } from './props/powerpole.ts';
 import { WEATHER_OPTIONS } from './weather.ts';
 import { ASPECTS, SCREEN_PX, STAGE_W, defaultScreen, drawStage, stageHeight, stageView } from './screen.ts';
@@ -417,6 +419,7 @@ export const ASSETS: Record<string, AssetDef> = {
   [LANDSCAPE_TYPE]: LANDSCAPE_ASSET,
   [FOLIAGE_TYPE]: FOLIAGE_ASSET,
   ...SPLINE_ASSETS,
+  ...BRUSH_ASSETS,
   [POWERPOLE_TYPE]: POWERPOLE_ASSET,
   box: {
     label: 'Box',
@@ -1082,8 +1085,11 @@ export const ASSETS: Record<string, AssetDef> = {
         type: 'select',
         default: 'bounds',
         options: [
+          { value: 'auto', label: 'Wie im Modell' },
           { value: 'none', label: 'Keine' },
           { value: 'bounds', label: 'Box (Umriss)' },
+          { value: 'convex', label: 'Konvexe Hülle' },
+          { value: 'mesh', label: 'Exakt (Dreiecke)' },
         ],
         group: 'Physik',
       },
@@ -1099,6 +1105,8 @@ export const ASSETS: Record<string, AssetDef> = {
       }
       const colorables: THREE.Mesh[] = [];
       let disposed = false;
+      let exact: 'convex' | 'mesh' | null = null;
+      let loaded: THREE.Object3D | null = null;
       const ready = ref
         ? loadModel(ref).then((model) => {
             if (!model || disposed) return;
@@ -1111,14 +1119,78 @@ export const ASSETS: Record<string, AssetDef> = {
               }
             });
             group.add(model);
+            loaded = model;
             if (helper) helper.visible = false;
-            if (p(o, 'collision', 'bounds') === 'bounds') group.userData.collider = 'bounds';
+            let col: string = p(o, 'collision', 'bounds');
+            if (col === 'auto') col = ({ box: 'bounds', none: 'none', convex: 'convex', mesh: 'mesh' } as Record<string, string>)[modelCollision(model) ?? 'box'] ?? 'bounds';
+            if (col === 'bounds') group.userData.collider = 'bounds';
+            if (col === 'convex' || col === 'mesh') exact = col;
           })
         : Promise.resolve();
-      return { object: group, helper, colorables, ready, dispose: () => (disposed = true) };
+      return {
+        object: group,
+        helper,
+        colorables,
+        ready,
+        colliders: () => (exact && loaded ? modelColliders(loaded, exact) : []),
+        dispose: () => (disposed = true),
+      };
     },
   },
 };
+
+/** Dreiecks-Collider eines Modells in Weltkoordinaten: exakt oder als konvexe Hülle */
+function modelColliders(model: THREE.Object3D, kind: 'convex' | 'mesh'): Collider[] {
+  model.updateWorldMatrix(true, true);
+  const verts: number[] = [];
+  const idx: number[] = [];
+  const v = new THREE.Vector3();
+  model.traverse((c) => {
+    const mesh = c as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.visible) return;
+    const pos = mesh.geometry.attributes.position;
+    if (!pos) return;
+    const base = verts.length / 3;
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(mesh.matrixWorld);
+      verts.push(v.x, v.y, v.z);
+    }
+    const index = mesh.geometry.index;
+    if (index) for (let i = 0; i < index.count; i++) idx.push(base + index.getX(i));
+    else for (let i = 0; i < pos.count; i++) idx.push(base + i);
+  });
+  if (!verts.length) return [];
+  let vertices = new Float32Array(verts);
+  let indices = new Uint32Array(idx);
+  if (kind === 'convex') {
+    const pts: THREE.Vector3[] = [];
+    for (let i = 0; i < vertices.length; i += 3) pts.push(new THREE.Vector3(vertices[i], vertices[i + 1], vertices[i + 2]));
+    const hull = new ConvexHull().setFromPoints(pts);
+    const hv: number[] = [];
+    const hi: number[] = [];
+    for (const f of hull.faces) {
+      const loop: THREE.Vector3[] = [];
+      let e = f.edge;
+      do {
+        loop.push(e.head().point);
+        e = e.next;
+      } while (e !== f.edge && loop.length < 64);
+      const b = hv.length / 3;
+      for (const p of loop) hv.push(p.x, p.y, p.z);
+      for (let i = 1; i + 1 < loop.length; i++) hi.push(b, b + i, b + i + 1);
+    }
+    if (!hi.length) return [];
+    vertices = new Float32Array(hv);
+    indices = new Uint32Array(hi);
+  }
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (let i = 1; i < vertices.length; i += 3) {
+    minY = Math.min(minY, vertices[i]);
+    maxY = Math.max(maxY, vertices[i]);
+  }
+  return [{ type: 'trimesh', vertices, indices, minY, maxY }];
+}
 
 function seedOf(o: MapObjectData): number {
   let h = 7;
@@ -1166,7 +1238,7 @@ function lightControl(state: LightState, setColor: (c: string) => void): LightCo
   };
 }
 
-export const CATEGORIES = ['Geometrie', 'Props', 'Licht', 'Volumetrik', 'Effekte', 'Gameplay', 'Modelle'];
+export const CATEGORIES = ['Geometrie', 'Brushes', 'Props', 'Licht', 'Volumetrik', 'Effekte', 'Gameplay', 'Modelle'];
 
 /** Vorlage im Content Browser: Asset-Typ + Startwerte */
 export interface AssetPreset {
@@ -1186,6 +1258,7 @@ export const PRESETS: AssetPreset[] = [
   { id: 'plane', label: 'Ebene', category: 'Geometrie', type: 'plane', icon: 'plane', scale: [4, 1, 4] },
   { id: 'stairs', label: 'Treppe', category: 'Geometrie', type: 'stairs', icon: 'stairs', scale: [1.5, 1.2, 2.4] },
   { id: 'doorwall', label: 'Wand mit Tür', category: 'Geometrie', type: 'doorwall', icon: 'door', scale: [4, 3, 0.3] },
+  ...BRUSH_PRESETS.map((b) => ({ id: b.id, label: b.label, category: 'Brushes', type: BRUSH_TYPE, icon: b.icon, scale: b.scale, rot: b.rot, props: b.props })),
 
   { id: 'wall', label: 'Wand (Beton)', category: 'Props', type: 'box', icon: 'wall', scale: [4, 3, 0.3], props: { material: 'wand_beton', color: '#ffffff' } },
   { id: 'floor', label: 'Boden (Fliesen)', category: 'Props', type: 'box', icon: 'floor', scale: [10, 0.1, 10], props: { material: 'bodenfliesen', color: '#ffffff', castShadow: false } },

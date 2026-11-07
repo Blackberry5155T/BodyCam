@@ -5,6 +5,12 @@ const P: Record<string, string> = {
   cylinder: '<ellipse cx="12" cy="6" rx="7" ry="2.6"/><path d="M5 6v12c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6V6"/>',
   plane: '<path d="M3 15 9 9h12l-6 6z"/>',
   stairs: '<path d="M3 20h5v-4h4v-4h4V8h5V4"/><path d="M3 20h18V4"/>',
+  wedge: '<path d="M3 19h18V6z"/><path d="M21 6 17 4 3 17v2" opacity=".6"/>',
+  sphere: '<circle cx="12" cy="12" r="8"/><ellipse cx="12" cy="12" rx="8" ry="3"/>',
+  window: '<path d="M4 4h16v16H4z"/><path d="M12 4v16M4 12h16"/>',
+  subtract: '<path d="M4 4h16v16H4z" stroke-dasharray="3 2"/><path d="M8 12h8"/>',
+  intersect: '<circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6"/>',
+  bake: '<path d="M12 3 20 7.5v9L12 21 4 16.5v-9z"/><path d="M9 12l2 2 4-4"/>',
   door: '<path d="M3 21V4h18v17"/><path d="M10 21v-9h4v9"/>',
   wall: '<path d="M3 6h18v12H3z"/><path d="M3 10h18M3 14h18M8 6v4M14 6v4M11 10v4M17 10v4M8 14v4M14 14v4"/>',
   floor: '<path d="M2 16 8 10h14l-6 6z"/><path d="M5 13h14M11 10l-6 6M16 10l-6 6"/>',
@@ -63,6 +69,31 @@ const P: Record<string, string> = {
   fence: '<path d="M5 4v17M12 4v17M19 4v17"/><path d="M3 8h18M3 16h18"/>',
   cable: '<path d="M5 3v18M19 3v18"/><path d="M5 6c4 6 10 6 14 0"/><path d="M5 10c4 6 10 6 14 0" opacity=".6"/>',
   water: '<path d="M2 9c2.5-2 4.5 2 7 0s4.5 2 7 0 4.5 2 6 0"/><path d="M2 14c2.5-2 4.5 2 7 0s4.5 2 7 0 4.5 2 6 0"/><path d="M2 19c2.5-2 4.5 2 7 0s4.5 2 7 0 4.5 2 6 0"/>',
+  // Modeler
+  modeler: '<path d="M12 3 20 7.5v9L12 21 4 16.5v-9z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/><circle cx="12" cy="3" r="1.6" fill="currentColor"/><circle cx="20" cy="7.5" r="1.6" fill="currentColor"/><circle cx="4" cy="16.5" r="1.6" fill="currentColor"/>',
+  vertex: '<path d="M4 18 12 6l8 12z" opacity=".45"/><circle cx="12" cy="6" r="2.6" fill="currentColor"/>',
+  edge: '<path d="M4 18 12 6" opacity=".45"/><path d="M12 6l8 12" stroke-width="3"/><path d="M4 18h16" opacity=".45"/>',
+  face: '<path d="M4 18 12 6l8 12z" fill="currentColor" fill-opacity=".55"/>',
+  objectMode: '<path d="M12 3 20 7.5v9L12 21 4 16.5v-9z" fill="currentColor" fill-opacity=".25"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/>',
+  editMode: '<path d="M12 3 20 7.5v9L12 21 4 16.5v-9z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/><circle cx="12" cy="12" r="1.8" fill="currentColor"/><circle cx="4" cy="7.5" r="1.6" fill="currentColor"/><circle cx="20" cy="16.5" r="1.6" fill="currentColor"/>',
+  extrude: '<path d="M4 16h16l-3 4H7z" opacity=".5"/><path d="M7 9h10v7H7z"/><path d="M12 4v9M9 7l3-3 3 3"/>',
+  inset: '<path d="M3 5h18v14H3z"/><path d="M8 9h8v6H8z" fill="currentColor" fill-opacity=".35"/><path d="M3 5l5 4M21 5l-5 4M3 19l5-4M21 19l-5-4"/>',
+  bevel: '<path d="M4 20V10l6-6h10"/><path d="M4 10l6-6" stroke-width="3"/>',
+  loopcut: '<path d="M4 4h16v16H4z"/><path d="M12 2v20" stroke="#ffd34d" stroke-width="2"/>',
+  subdivide: '<path d="M4 4h16v16H4z"/><path d="M12 4v16M4 12h16"/>',
+  circle: '<circle cx="12" cy="12" r="8"/>',
+  cone: '<path d="M12 3 5 18M12 3l7 15"/><ellipse cx="12" cy="18" rx="7" ry="2.6"/>',
+  torus: '<ellipse cx="12" cy="12" rx="9" ry="5"/><ellipse cx="12" cy="11.5" rx="3.5" ry="1.6"/>',
+  magnet: '<path d="M6 4v8a6 6 0 0 0 12 0V4h-4v8a2 2 0 0 1-4 0V4z"/><path d="M6 8h4M14 8h4"/>',
+  xray: '<path d="M4 6h12v12H4z"/><path d="M8 2h12v12H8z" stroke-dasharray="2 2"/>',
+  undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>',
+  redo: '<path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/>',
+  frame: '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/><circle cx="12" cy="12" r="3"/>',
+  mirror: '<path d="M12 3v18" stroke-dasharray="2 2"/><path d="M9 6 3 12l6 6zM15 6l6 6-6 6z"/>',
+  close: '<path d="M6 6l12 12M18 6 6 18"/>',
+  merge: '<path d="M5 5l7 7 7-7M12 12v8"/>',
+  fill: '<path d="M4 18 12 6l8 12z" fill="currentColor" fill-opacity=".35"/><path d="M4 18 12 6l8 12z"/>',
+  levelPlace: '<path d="M3 20h18"/><path d="M12 4 18 7.5v6L12 17 6 13.5v-6z"/><path d="M12 17v3"/>',
 };
 
 export function icon(name: string, extra = ''): string {
@@ -99,6 +130,8 @@ export const TYPE_ICONS: Record<string, string> = {
   powerpole: 'pole',
   landscape: 'mountain',
   foliage: 'leaf',
+  brush: 'brush',
+  staticmesh: 'bake',
 };
 
 export const CATEGORY_COLORS: Record<string, string> = {
@@ -110,4 +143,5 @@ export const CATEGORY_COLORS: Record<string, string> = {
   Gameplay: '#46d36b',
   Modelle: '#ff5fa2',
   Splines: '#ffb347',
+  Brushes: '#4da3ff',
 };

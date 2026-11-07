@@ -1544,3 +1544,340 @@ select {
   flex-direction: column;
   gap: 4px;
 }
+
+/* Modeling-Modus (Brushes) */
+.modeling-panel .section {
+  margin: 0 -12px;
+}
+.modeling-panel .section-body > :not(.prop-row) {
+  margin: 0 8px 0 12px;
+}
+.ls-layer.brush-face {
+  grid-template-columns: 1fr;
+}
+
+/* ---------- Dokument-Tabs (Level / Modeler) ---------- */
+#doctabs {
+  height: 30px;
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 0 8px;
+  background: var(--bg-0);
+  border-bottom: 1px solid var(--bg-4);
+}
+#doctabs.hidden {
+  display: none;
+}
+.doctab {
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  max-width: 260px;
+  border-radius: 5px 5px 0 0;
+  background: var(--bg-1);
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.doctab:hover {
+  color: var(--text);
+  background: var(--bg-3);
+}
+.doctab.active {
+  background: var(--bg-2);
+  color: #fff;
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.doctab svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+.doctab .dt-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.doctab .dt-dirty {
+  color: var(--select);
+}
+.doctab .dt-close {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 3px;
+  opacity: 0.6;
+}
+.doctab .dt-close:hover {
+  opacity: 1;
+  background: var(--bg-5);
+}
+.doctab .dt-close svg {
+  width: 11px;
+  height: 11px;
+}
+
+/* ---------- Modeler ---------- */
+#modeler {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-2);
+}
+.md-toolbar {
+  height: 40px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.md-toolbar .tb-button {
+  flex: none;
+  white-space: nowrap;
+}
+.md-caret {
+  font-size: 9px;
+  opacity: 0.6;
+  margin-left: -2px;
+}
+.md-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.md-shelf {
+  width: 42px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 6px 0;
+  background: var(--bg-1);
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.md-shelf .tb-button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  justify-content: center;
+}
+.md-shelf-sep {
+  width: 24px;
+  height: 1px;
+  background: var(--bg-5);
+  margin: 4px 0;
+}
+.md-viewport {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  background: #303030;
+}
+.md-viewport > canvas:first-child {
+  display: block;
+  outline: none;
+}
+.md-nav {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 96px;
+  height: 96px;
+  cursor: pointer;
+}
+.md-marquee {
+  position: absolute;
+  border: 1px dashed #fff;
+  background: rgba(255, 255, 255, 0.06);
+  pointer-events: none;
+}
+.md-info {
+  position: absolute;
+  top: 8px;
+  left: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: #ddd;
+  text-shadow: 0 1px 2px #000;
+  pointer-events: none;
+}
+.md-info b {
+  font-size: 12px;
+  color: #fff;
+}
+.md-hud {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 7px 14px;
+  border-radius: 6px;
+  background: rgba(10, 10, 10, 0.82);
+  border: 1px solid var(--bg-5);
+  color: #fff;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.md-hud span {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 13px;
+  color: var(--select);
+}
+.md-hud small {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+.md-redo {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  width: 250px;
+  background: rgba(21, 21, 21, 0.94);
+  border: 1px solid var(--bg-5);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+.md-redo-head {
+  padding: 6px 10px;
+  background: var(--bg-3);
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+.md-redo-head::before {
+  content: '▾ ';
+  opacity: 0.6;
+}
+.md-redo.collapsed .md-redo-head::before {
+  content: '▸ ';
+}
+.md-redo.collapsed .md-redo-body {
+  display: none;
+}
+.md-redo-body {
+  padding: 4px 0;
+}
+.md-redo .prop-row label {
+  width: 100px;
+}
+.md-side {
+  width: 330px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+  border-radius: 0;
+}
+.md-side-body {
+  flex: 1;
+  overflow-y: auto;
+}
+.md-objects,
+.md-slots {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 0;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.md-obj,
+.md-slot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.md-obj:hover,
+.md-slot:hover {
+  background: var(--bg-4);
+}
+.md-obj.selected {
+  background: rgba(255, 165, 0, 0.12);
+}
+.md-obj.active,
+.md-slot.active {
+  background: var(--accent-soft);
+  color: #fff;
+}
+.md-obj svg {
+  width: 14px;
+  height: 14px;
+}
+.md-obj-name,
+.md-slot-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.md-obj-sub {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.md-eye {
+  display: inline-flex;
+  opacity: 0.7;
+}
+.md-eye:hover {
+  opacity: 1;
+}
+.md-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid var(--bg-5);
+  flex: none;
+}
+.md-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 10px;
+}
+.prop-row .md-btns {
+  padding: 0;
+}
+.btn.md-small {
+  padding: 2px 8px;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.btn.md-small svg {
+  width: 12px;
+  height: 12px;
+}
+.md-dim {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.md-hint {
+  padding: 4px 10px 6px;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.4;
+}
