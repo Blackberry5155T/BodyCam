@@ -395,6 +395,7 @@ export class Terminal {
     this.settings.set('bloomStrength', ui.slider('bloomStr', x, y(4), cw, 'Bloom-Stärke', d.bloomStrength, 0, 2, 0.05, pct));
     this.settings.set('brightness', ui.slider('bright', x, y(5), cw, 'Helligkeit', d.brightness, 0.5, 1.6, 0.05, pct));
     this.settings.set('fogEnabled', ui.toggle(x, y(6), cw, 'Nebel', d.fogEnabled));
+    this.settings.set('godRays', ui.slider('godRays', x, y(7), cw, 'God-Rays', d.godRays, 0, 2, 0.05, pct));
     const vs = this.settings.viewScale;
     this.settings.set('viewDistance', ui.slider('view', x2, y(0), cw, 'Sichtweite', d.viewDistance, 5, 60, 1, (v) => `${Math.round(v * vs)} m`));
     this.settings.set('reflections', ui.select(x2, y(1), cw, 'Spiegelungen', REFLECTION_LABELS, d.reflections));
@@ -403,8 +404,8 @@ export class Terminal {
     this.settings.set('foliageDensity', ui.select(x2, y(4), cw, 'Foliage-Dichte', FOLIAGE_LABELS, d.foliageDensity));
     this.settings.set('foliageDistance', ui.select(x2, y(5), cw, 'Foliage-Weite', FOLIAGE_LABELS, d.foliageDistance));
     this.settings.set('grass', ui.toggle(x2, y(6), cw, 'Gras', d.grass));
-    ui.text('Auflösung bezieht sich auf die Pixeldichte des Displays (max. 2x).', x, y(7) + 14, 17, THEME.dim);
-    ui.text('Foliage-Dichte dünnt nur Deko ohne Kollision und Sichtschutz aus (z. B. Grasbüschel).', x, y(7) + 40, 17, THEME.dim);
+    ui.text('Auflösung bezieht sich auf die Pixeldichte des Displays (max. 2x).', x, y(8) + 14, 17, THEME.dim);
+    ui.text('Foliage-Dichte dünnt nur Deko ohne Kollision und Sichtschutz aus (z. B. Grasbüschel).', x, y(8) + 40, 17, THEME.dim);
   }
 
   private drawBodycam(x: number, w: number): void {

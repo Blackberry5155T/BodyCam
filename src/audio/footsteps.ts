@@ -7,6 +7,7 @@ import { SURFACES, type StepSound, type SurfaceId } from '../world/surfaces.ts';
 let ctx: AudioContext | null = null;
 let master: GainNode | null = null;
 let noise: AudioBuffer | null = null;
+let muffle: BiquadFilterNode | null = null;
 
 function audio(): AudioContext | null {
   if (ctx) return ctx;
@@ -17,7 +18,11 @@ function audio(): AudioContext | null {
   }
   master = ctx.createGain();
   master.gain.value = 0.55;
-  master.connect(ctx.destination);
+  // Tiefpass am Ausgang: unter Wasser dumpf (setAudioUnderwater)
+  muffle = ctx.createBiquadFilter();
+  muffle.type = 'lowpass';
+  muffle.frequency.value = 20000;
+  master.connect(muffle).connect(ctx.destination);
   // 2 s weißes Rauschen, jeder Schritt liest ab einer zufälligen Stelle
   noise = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
   const d = noise.getChannelData(0);
@@ -116,4 +121,49 @@ export function playFootstep(surface: SurfaceId, speed: number, crouching: boole
 export function playLanding(surface: SurfaceId, impact: number, crouching: boolean): void {
   const k = Math.min(1, (impact - 2) / 6);
   play(SURFACES[surface].step, (0.75 + k * 0.35) * (crouching ? 0.7 : 1), 0.4 + k * 0.6);
+}
+
+export type WaterSound = 'step' | 'stroke' | 'splash' | 'dive';
+
+/**
+ * Wassergeräusche (Phase 6): Platschen beim Waten, Schwimmzug, Eintauchen, Abtauchen (Blubbern).
+ * Stärke 0..1 (Waten: Tiefe/Tempo, Eintauchen: Fallgeschwindigkeit).
+ */
+export function playWater(kind: WaterSound, strength: number): void {
+  const a = audio();
+  if (!a || !master || a.state !== 'running') return;
+  const k = Math.max(0, Math.min(1, strength));
+  const t = a.currentTime + 0.005;
+  const pitch = 0.85 + Math.random() * 0.3;
+  const out = a.createGain();
+  out.gain.value = kind === 'splash' ? 0.5 + k * 0.6 : kind === 'step' ? 0.25 + k * 0.4 : 0.3 + k * 0.3;
+  out.connect(master);
+  // Platschen: Rauschen, Bandpass gleitet von hell nach dumpf
+  const len = kind === 'splash' ? 0.35 + k * 0.5 : kind === 'stroke' ? 0.32 : kind === 'dive' ? 0.25 : 0.16 + k * 0.12;
+  const src = noiseSource(a, t, len);
+  const bp = filter(a, 'bandpass', 1800, 1.2);
+  bp.frequency.setValueAtTime((kind === 'stroke' ? 1400 : 2600) * pitch, t);
+  bp.frequency.exponentialRampToValueAtTime(380 * pitch, t + len);
+  const g = envelope(a, t, kind === 'dive' ? 0.25 : 0.9, kind === 'stroke' ? 0.06 : 0.008, len);
+  src.connect(bp).connect(g).connect(out);
+  // Blubbern: kurze, steigende Sinus-Tröpfchen
+  const drops = kind === 'step' ? 2 : kind === 'stroke' ? 3 : kind === 'dive' ? 9 : 6 + Math.round(k * 8);
+  for (let i = 0; i < drops; i++) {
+    const td = t + 0.02 + Math.random() * len * 1.2;
+    const o = a.createOscillator();
+    const f0 = (kind === 'dive' ? 300 : 600) + Math.random() * 900;
+    o.frequency.setValueAtTime(f0 * pitch, td);
+    o.frequency.exponentialRampToValueAtTime(f0 * pitch * 2.2, td + 0.04);
+    const gd = envelope(a, td, 0.12 + Math.random() * 0.12, 0.003, 0.05);
+    o.connect(gd).connect(out);
+    o.start(td);
+    o.stop(td + 0.1);
+  }
+}
+
+/** Ausgang unter Wasser dämpfen (0 = normal, 1 = ganz unter Wasser) */
+export function setAudioUnderwater(k: number): void {
+  if (!ctx || !muffle) return;
+  const hz = 20000 * Math.pow(500 / 20000, Math.max(0, Math.min(1, k)));
+  muffle.frequency.setTargetAtTime(hz, ctx.currentTime, 0.05);
 }

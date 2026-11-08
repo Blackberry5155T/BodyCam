@@ -1,6 +1,6 @@
 # Editor-Erweiterung nach UE5-Vorbild — Umsetzungsplan
 
-Stand: 06.11.2026 · Status: **freigegeben (E1–E4 entschieden), Phase 0–5 und 5b (3D-Modeler) umgesetzt, wartet auf Rückmeldung zu Phase 5b**
+Stand: 08.11.2026 · Status: **freigegeben (E1–E4 entschieden), Phase 0–6 umgesetzt + Wasserquelle, wartet auf Rückmeldung**
 
 Dieser Plan erweitert den Map-Editor (`editor.html`) um Werkzeuge aus der Unreal Engine 5: Landscape, Foliage,
 Splines, Geometry-Brushes, Wasser mit Physik, Prefabs und neue Script-Blöcke. Er baut auf dem bestehenden Code auf
@@ -387,6 +387,64 @@ Wellen), **Fluss** (aus Spline, siehe 3.4). Einstellungen: Farbe/Trübung, Sicht
   Fortschrittsanzeige, abbrechbar). Ergebnis: Oberflächen-Mesh pro Frame, gespeichert als Vertex Animation Texture.
   Im Spiel: Abspielen per Script (z. B. „Damm bricht“, „Raum läuft voll“), danach optional Übergang in einen statischen
   Wasser-Körper mit Endfüllstand. Spieler/Objekte reagieren nur auf den Füllstand, nicht auf jedes Partikel.
+
+> **Umgesetzt (Phase 6, 08.11.2026):** Code in `world/water/` (`asset.ts` See/Fluss/Meer, `waves.ts` Gerstner-Wellen,
+> `registry.ts` Abfrage + Ereignisse, `material.ts`, `system.ts` WaterPass + Spiegelung, `ripples.ts`, `splash.ts`),
+> Editor-Modus `editor/modes/water.ts`, simulierte Props in `physics/dynamicProps.ts`, Spieler in `player/controller.ts`
+> und `player/body.ts`, Unterwasser-Effekt in `postfx/bodycam.ts`, Geräusche in `audio/footsteps.ts`.
+> - **Wasser-Körper:** See (geschlossener Umriss, flach), Fluss (Spline mit Höhe/Breite je Punkt, Strömung in
+>   Kurvenrichtung, gräbt sein Bett nicht-destruktiv über die Spline-Deformation aus Phase 4), Meer (unendlich, eins
+>   pro Map). Vorlagen *See*, *Teich (trüb)*, *Fluss*, *Bach*, *Meer*. Einstellungen wie geplant (Farbe, Trübung,
+>   Sichttiefe, Schaum, Wellenhöhe/-länge/-richtung, Strömung).
+> - **Darstellung:** eigener WaterPass direkt nach der opaken Szene: Gerstner-Wellen (CPU und GPU identisch, `waterAt()`),
+>   Brechung aus der aufgelösten Farb-/Tiefentextur, Absorption nach Beer-Lambert, Uferschaum über die
+>   Tiefendifferenz, Flow-Map bei Flüssen. Spiegelung: eigene planare Spiegelkamera an der nächsten Wasserfläche (das
+>   Pfützen-System spiegelt nur auf dem Boden), Qualität über Grafik › *Spiegelungen*, sonst Himmelsfarbe.
+> - **Wellen & Spritzer:** GPU-Wellengleichung 512² über 64 m um die Kamera, Impulse von Schritten, Schwimmzügen,
+>   Kugeln und treibenden Objekten; Tropfen-Partikel im WaterPass.
+> - **Spieler:** Zustände Waten / Schwimmen (ab 1,35 m Tiefe) / Tauchen. Waten bremst bis 45 % und schiebt mit der
+>   Strömung, Kleidung wird bis zur Wasserlinie dunkler/glänzender und trocknet langsam. Schwimmen 1,5 m/s (Sprint
+>   2,4), Leertaste hoch bzw. an der Kante hinausziehen, Strg oder Blick nach unten taucht. Atemluft 30 s, danach
+>   Schaden (Training) oder Neustart am Spawn. Unter Wasser: Nebel in Wasserfarbe mit Sichttiefe des Gewässers,
+>   Wackeln/Unschärfe/Tönung im Bodycam-Pass, Tiefpass auf allen Sounds; Linsentropfen beim Auftauchen.
+> - **Simulierte Props:** Details-Panel *Physik › Simuliert, Masse, Auftrieb*; Presets *Fass* und *Kiste (simuliert)*.
+>   Dynamischer Rapier-Körper (CCD), Auftrieb an 8 Oktanten-Punkten mit dem eingetauchten Anteil aus Wellenhöhe und
+>   Lage, Widerstand gegen die Strömung, Dämpfung des Auf-und-ab-Schwingens. Spieler schiebt sie, Kugeln stoßen sie an.
+> - **Getestet (Headless-Browser):** See, Fluss, Meer im Editor anlegen und speichern; im Spiel Waten (≈ 0,73 × Gehtempo
+>   bei 0,7 m Tiefe), Schwimmen mit Augen 22 cm über Wasser, Tauchen (Atem sinkt, Unterwasser-Effekt), Auftauchen,
+>   Abdrift im Fluss ≈ 1,2 m/s, Fass treibt den Fluss hinunter, Fass und Kiste schwimmen im See mit physikalisch
+>   passendem Tiefgang, Schuss ins Wasser erzeugt Fontäne + Wellenring; keine Konsolenfehler.
+> - **Noch offen:** keine brechenden Wellen am Ufer (nur Schaum), keine Kaustiken, NPCs gehen nicht ins Wasser,
+>   Fluid-Bake folgt in Phase 7.
+>
+> **Ergänzt (08.11.2026): Wasserquelle mit Simulation.** Neues Asset *Wasserquelle* (`world/water/source.ts`, Vorlage im
+> Wasser-Modus und im Content Browser). Statt FLIP-Partikeln eine **Flachwasser-Simulation** (Virtual Pipes, Mei 2007;
+> `world/water/shallow.ts`) auf einem Höhengitter um die Quelle — passt zum Spiel, weil Spieler/Objekte ohnehin nur
+> Wasserhöhe und Strömung brauchen (`waterAt()`).
+> - **Gelände:** Boden je Zelle = oberster Treffer von oben (Landscape exakt über `heightAt`, sonst BVH-Raycast auf
+>   Brushes/Objekte/Modelle; simulierte Props, Helfer und Foliage zählen nicht). Gebietsrand = Abfluss.
+> - **Editor:** Gebiet (Breite/Länge/Versatz, Zellgröße, max. 90 000 Zellen), Zufluss, Quellradius, Vorlauf, Reibung,
+>   Versickerung. Neuer Eigenschafts-Typ `action` (Knopf im Details- und Modus-Panel, `editor/assetAction.ts`):
+>   *Simulation berechnen* rechnet im Web Worker (`shallow.worker.ts`) mit Fortschritt und Zwischenbildern, das
+>   Ergebnis (Boden, Tiefe, Flüsse, Geschwindigkeit; zlib) liegt als Blob in der Map (`props.state`, Undo-fähig).
+>   *Wasser entfernen* setzt zurück. Verschieben/Gebiet ändern macht den Zustand ungültig (Panel zeigt „Veraltet“).
+> - **Laufzeit:** *Im Spiel weiterrechnen* → der Worker rechnet live weiter (Spiel und Editor-Simulieren; Stopp im Editor
+>   kehrt zum gespeicherten Zustand zurück). Oberfläche = dynamisches Gitter-Mesh nur über nassen Zellen mit
+>   Flow-Map-Strömung, Schaum bei schneller Strömung, Wasser-Material wie See/Fluss (Uferschaum schmaler).
+> - **Abgerundete Ufer:** pro Vertex eine weichgezeichnete Nass-Maske (`aEdge`; 3× Box-Blur r = 1 ≈ 3 Zellen), der
+>   Shader verwirft Pixel unter 0,5 (`EDGE_CLIP`) → Ecken und Treppen werden zu runden Uferlinien. Dünne Rinnsale
+>   (1–2 Zellen, erkannt über Blur r = 2) behalten mind. 0,55 und verschwinden nicht. Trockene Vertices liegen knapp
+>   über dem Boden, damit auf flachem Grund die runde Maske die Uferlinie bestimmt; am Hang schneidet das Gelände.
+> - **Behoben:** Die Wasser-Animation sprang alle ≈ 1,4 s zurück (Flow-Map: Phasen-Gewichte vertauscht, jede Phase
+>   sprang sichtbar auf 0; betraf auch Flüsse). Das Strömungs-Schaumrauschen ist jetzt ebenfalls zweiphasig statt
+>   „Strömung × Zeit“ (sprang bei jeder Strömungsänderung der Simulation). Gemessen: keine Bildsprünge mehr.
+> - **Getestet (Headless-Browser):** Hang (8°) mit Becken, 3 m³/s: 80 s Vorlauf in 1,8 s gerechnet; Wasser fließt den
+>   Hang mit ≈ 3,8 m/s hinunter, Becken füllt sich auf 0,42 m und steigt im Spiel live weiter, Spieler watet, Fass
+>   schwimmt; Undo/Redo, Simulieren/Stopp, Verschieben (ungültig/wieder gültig), *Wasser entfernen*, Produktions-Build
+>   (Worker als eigener Chunk); keine Konsolenfehler.
+> - **Noch offen:** mehrere Quellen teilen sich kein Gitter (überlappende Gebiete wissen nichts voneinander), eine
+>   Brücke über dem Fluss gilt als Boden (oberster Treffer), Wasser verformt das Gelände nicht (keine Erosion),
+>   kein Script-Block „Quelle an/aus“ (Phase 7).
 
 ### 3.7 Prefabs / Level Instances
 

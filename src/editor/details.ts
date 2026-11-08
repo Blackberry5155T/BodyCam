@@ -9,6 +9,7 @@ import { countEvents } from '../scripting/blocks.ts';
 import { TYPE_ICONS, icon } from './icons.ts';
 import { fmt, h, numberField, pickFile, toast } from './ui.ts';
 import { models } from './models.ts';
+import { actionButton } from './assetAction.ts';
 import { SUN_TYPE, findSun, quatFromRot, sunAngles, sunRotation, writeSunToObject } from '../world/sun.ts';
 
 // Details-Panel (rechts unten): Transform + Eigenschaften des ausgewählten Objekts, Script-Zugang,
@@ -239,6 +240,8 @@ export class DetailsPanel {
         }
       }, live);
     switch (p.type) {
+      case 'action':
+        return this.row('', actionButton(o, p));
       case 'number':
         return this.row(p.label, numberField({ value: Number(value), step: p.step ?? 0.1, min: p.min, max: p.max, onChange: (v, live) => set(v, live) }));
       case 'bool': {

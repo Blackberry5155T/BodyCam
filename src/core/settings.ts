@@ -75,6 +75,7 @@ export interface SettingsData {
   renderScale: number; // Faktor auf devicePixelRatio
   bloom: boolean;
   bloomStrength: number; // Faktor auf die Basisstärke (1 = alter Wert, Standard 0.5)
+  godRays: number; // Stärke der Sonnenstrahlen (0 = aus)
   reflections: number; // Index in REFLECTION_LABELS (Pfützen-Spiegelungen)
   volumetrics: number; // Index in VOLUMETRIC_LABELS (Nebel-Schritte, Partikelmenge)
   terrainDetail: number; // Index in TERRAIN_LABELS (Landscape-LOD)
@@ -118,6 +119,7 @@ const DEFAULTS: SettingsData = {
   renderScale: 1,
   bloom: true,
   bloomStrength: 0.5,
+  godRays: 1,
   reflections: 2,
   volumetrics: 2,
   terrainDetail: 2,

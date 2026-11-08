@@ -68,7 +68,12 @@ const P: Record<string, string> = {
   road: '<path d="M8 3 4 21M16 3l4 18"/><path d="M12 4v3M12 10.5v3M12 17v3"/>',
   fence: '<path d="M5 4v17M12 4v17M19 4v17"/><path d="M3 8h18M3 16h18"/>',
   cable: '<path d="M5 3v18M19 3v18"/><path d="M5 6c4 6 10 6 14 0"/><path d="M5 10c4 6 10 6 14 0" opacity=".6"/>',
+  spring: '<path d="M12 3c3 4.5 6 7.6 6 11a6 6 0 0 1-12 0c0-3.4 3-6.5 6-11z"/><path d="M9.2 15.2a2.8 2.8 0 0 0 2.8 2.6"/>',
   water: '<path d="M2 9c2.5-2 4.5 2 7 0s4.5 2 7 0 4.5 2 6 0"/><path d="M2 14c2.5-2 4.5 2 7 0s4.5 2 7 0 4.5 2 6 0"/><path d="M2 19c2.5-2 4.5 2 7 0s4.5 2 7 0 4.5 2 6 0"/>',
+  lake: '<path d="M5 9c2-4 12-5 15-1s0 10-7 10S3 13 5 9z"/><path d="M8 12c1.5-1 3 1 4.5 0s3 1 4.5 0" opacity=".6"/>',
+  river: '<path d="M7 3c-3 5 5 8 1 13l-2 5M15 3c-3 5 5 8 1 13l-2 5"/><path d="M10.5 9c.6 1.4 1.4 2.4 1.6 3.6" opacity=".6"/>',
+  ocean: '<path d="M2 12c2.5-3 4.5 3 7 0s4.5 3 7 0 4.5 3 6 0"/><path d="M2 17c2.5-3 4.5 3 7 0s4.5 3 7 0 4.5 3 6 0"/><circle cx="17" cy="6" r="2.2"/>',
+  barrel: '<path d="M7 3h10c1.6 3 1.6 15 0 18H7C5.4 18 5.4 6 7 3z"/><path d="M5.9 8h12.2M5.9 16h12.2"/>',
   // Modeler
   modeler: '<path d="M12 3 20 7.5v9L12 21 4 16.5v-9z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/><circle cx="12" cy="3" r="1.6" fill="currentColor"/><circle cx="20" cy="7.5" r="1.6" fill="currentColor"/><circle cx="4" cy="16.5" r="1.6" fill="currentColor"/>',
   vertex: '<path d="M4 18 12 6l8 12z" opacity=".45"/><circle cx="12" cy="6" r="2.6" fill="currentColor"/>',
@@ -131,6 +136,10 @@ export const TYPE_ICONS: Record<string, string> = {
   landscape: 'mountain',
   foliage: 'leaf',
   brush: 'brush',
+  waterlake: 'lake',
+  waterriver: 'river',
+  waterocean: 'ocean',
+  watersource: 'spring',
   staticmesh: 'bake',
 };
 
@@ -144,4 +153,5 @@ export const CATEGORY_COLORS: Record<string, string> = {
   Modelle: '#ff5fa2',
   Splines: '#ffb347',
   Brushes: '#4da3ff',
+  Wasser: '#3fb6d9',
 };

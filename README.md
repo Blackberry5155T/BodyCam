@@ -35,7 +35,7 @@ Schnee (füllen sich bei Schneefall langsam wieder) und Wellenringe in Pfützen.
 - **Testen:** *Simulieren* (Alt+S) führt Scripts im Editor aus: Kamera = Spieler, Klick = Benutzen, Shift+Klick = Treffer.
   *Spielen* (Alt+P) speichert und öffnet die Map im Spiel (`/?map=local:<Name>`). Erneutes Speichern lädt den Spiel-Tab neu.
 - **Modi:** Knopf links in der Toolbar bzw. Umschalt+1…6 — Auswahl, Landscape, Foliage, Modeling, Splines, Wasser
-  (Plan: `docs/Editor-Erweiterung-Plan.md`; Auswahl, Landscape, Foliage, Modeling und Splines sind fertig, der Wasser-Modus zeigen vorerst nur, was geplant ist).
+  (Plan: `docs/Editor-Erweiterung-Plan.md`; alle sechs Modi sind fertig).
 - **Landscape** (Modus Umschalt+2, wie UE5): *Neue Landscape…* (Komponenten à 128 Quads, Quad-Größe, optional aus Heightmap)
   oder *Aus Heightmap…* (16-bit PNG oder RAW `.r16`; Min/Max-Höhe im Dialog). Werkzeuge 1–8: Formen (Umschalt = senken),
   Glätten, Abflachen, Rampe (zwei Klicks, Enter), Noise, Erosion (hydraulisch/thermisch; als Pinsel oder im Hintergrund auf
@@ -114,6 +114,29 @@ Schnee (füllen sich bei Schneefall langsam wieder) und Wellenringe in Pfützen.
   **Kabel/Rohr:** Kabel hängen zwischen den Punkten durch (*Durchhang* in % der Spannweite), Rohre folgen der Kurve.
   Neues Asset *Props › Strommast* (auch als Telefonmast): einen Kabel-Punkt auf den Mast klicken, dann rastet er am
   Isolator ein und wandert mit, wenn der Mast verschoben oder gedreht wird (*Lösen* im Panel hebt das auf).
+- **Wasser** (Modus Umschalt+6, wie UE5 Water Bodies): oben *See*, *Teich (trüb)*, *Fluss*, *Bach*, *Meer* oder *Wasserquelle* wählen.
+  See: Umriss in den Viewport klicken (Enter oder Esc beendet, der Umriss schließt sich selbst), der Wasserspiegel liegt am tiefsten Uferpunkt und ist im
+  Panel über die Höhe einstellbar. Fluss: Mittellinie klicken, Höhe und Breite je Punkt, *Strömung* in m/s in
+  Kurvenrichtung; *Gelände anpassen* gräbt das Bett (Tiefe, Böschung) nicht-destruktiv in die Landscape. Meer: ein
+  Klick, eins pro Map, unendliche Fläche. Einstellungen: Farbe, Trübung, Sichttiefe, Schaum, Wellenhöhe/-länge/-richtung.
+  Darstellung: Gerstner-Wellen, Brechung, Tiefenfärbung, Uferschaum, Spiegelung (Grafik › *Spiegelungen*), Flow-Map bei
+  Flüssen, Wellenringe (GPU-Simulation um die Kamera) und Spritzer bei Schritten, Schüssen und Objekten.
+  **Wasserquelle** (echte Wasser-Simulation): ein Klick setzt die Quelle, im Panel *Zufluss* (m³/s), *Quellradius* und das
+  *Gebiet* (Breite/Länge/Versatz/Zellgröße) einstellen, dann *Simulation › Simulation berechnen*. Das Wasser läuft
+  (Flachwasser-Simulation im Web Worker, Fortschritt am Knopf) über Landscape, Brushes und Objekte, sucht sich selbst
+  seinen Weg, bildet Bäche, füllt Mulden zu Seen und fließt am Gebietsrand ab. *Vorlauf* = vorgerechnete Sekunden,
+  *Reibung*, *Versickerung*. Der Zustand wird mit der Map gespeichert (Undo-fähig); *Im Spiel weiterrechnen* lässt das
+  Wasser beim Simulieren (Alt+S) und im Spiel live weiterfließen. Die Ufer sind abgerundet (keine Zellen-Treppen),
+  schmale Rinnsale bleiben sichtbar. Waten, Schwimmen, Strömung und treibende Objekte
+  funktionieren wie bei See/Fluss. Nach Verschieben der Quelle oder Ändern des Gebiets neu berechnen; *Wasser entfernen*
+  löscht den Zustand.
+  **Im Spiel:** Waten ab Knöchelhöhe (langsamer, Platschen, Kleidung wird bis zur Wasserlinie nass und trocknet langsam),
+  Schwimmen ab Brusthöhe (W/A/S/D, Umschalt schneller, Leertaste hoch/aus dem Wasser), Tauchen mit Strg bzw. nach unten
+  schauen. Unter Wasser: Atemluft-Leiste (30 s), Nebel in Wasserfarbe, gedämpfter Ton, Linsentropfen beim Auftauchen;
+  ohne Luft gibt es Schaden (Training) bzw. Neustart am Spawn. Strömung treibt Spieler und Objekte ab.
+  **Simulierte Props:** im Details-Panel *Physik › Simuliert*, *Masse*, *Auftrieb* (Content Browser: *Props › Fass*,
+  *Kiste (simuliert)*). Sie fallen, rollen, lassen sich schieben und anschießen und schwimmen im Wasser (Auftrieb an
+  8 Punkten mit Wellenhöhe, Wasserwiderstand, Strömung). Im Editor bleiben sie statisch.
 - **Texturen** (Content Browser › Texturen): prozedurale Sets, Projekt-Sets aus `public/assets/textures/<Name>/` und im
   Browser importierte Sets. Dateien werden am Namen erkannt (Poly Haven, ambientCG, Quixel: `albedo`/`basecolor`/`diff`,
   `normal`/`nor_gl` (DirectX-Normalen `_dx` werden umgerechnet), `rough`, `ao`, `height`/`disp`, `arm`).
@@ -166,6 +189,10 @@ src/
                           Material-Layer (layers.ts), Malen + Gewichtsmasken (paint.ts), Textur-Bibliothek (textures.ts)
     foliage/              Foliage: Typen + Platzhalter (types.ts), Instanzen in 64-m-Zellen (data.ts), Meshes/LOD/
                           Impostor-Backen (meshes.ts), Instanz-Renderer + Kollision (render.ts), Layer-Gras (grass.ts)
+    water/                Wasser: Assets See/Fluss/Meer (asset.ts), Gerstner-Wellen CPU = GPU (waves.ts), Abfrage
+                          Höhe/Strömung + Ereignisse (registry.ts), Material + WaterPass (material.ts, system.ts),
+                          Wellenringe (ripples.ts), Spritzer (splash.ts), Wasserquelle mit Flachwasser-Simulation
+                          (source.ts, Löser shallow.ts, Web Worker shallow.worker.ts)
     surfaces.ts           Oberflächen-Typen (Gras, Erde, Fels …): Schritt-Klang, Einschlag, Nässe-Verhalten
   scripting/
     blocks.ts             Block-Definitionen + Code-Generator (nur Editor)
@@ -176,6 +203,7 @@ src/
     history.ts            Delta-Undo für große Raster (Heightmaps/Splatmaps), kachelweise komprimiert
   physics/
     physics.ts            Rapier-Physikwelt: Map-Collider abgleichen, Charakter-Kapsel, Abfragen
+    dynamicProps.ts       Simulierte Props: dynamische Körper, Auftrieb/Widerstand/Strömung im Wasser, Kugel-Impulse
   player/
     controller.ts         Bewegung, Kollision (Rapier-Charakter-Controller), Kamera (Wippen, Rückstoß, Autopilot)
     body.ts               Würfel-Körper mit Gelenk-Rig + prozeduralen Animationen

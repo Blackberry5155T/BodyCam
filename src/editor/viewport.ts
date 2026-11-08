@@ -19,6 +19,7 @@ import { findWeather, weatherWorld } from '../world/weatherObject.ts';
 import { h } from './ui.ts';
 import { volumeFX } from '../world/volumetrics.ts';
 import { VolumePass } from '../rendering/volumePass.ts';
+import { WaterPass, WaterSystem } from '../world/water/system.ts';
 import type { ModeInput } from './modes/types.ts';
 import { browserBlobs } from '../world/blobStore.ts';
 import { updateLandscapes } from '../world/landscape/render.ts';
@@ -84,6 +85,7 @@ export class Viewport {
   private entries = new Map<string, Entry>();
   private world: WorldRig;
   private weather: Weather;
+  private water: WaterSystem;
   private fog = new THREE.Fog(0x000000, 1, 80);
   private grid = new THREE.Group();
   private composer: EffectComposer;
@@ -151,6 +153,12 @@ export class Viewport {
     this.world = new WorldRig(state.map.world);
     this.scene.add(this.world.group);
     this.weather = new Weather(this.renderer, this.scene, this.world);
+    // Wasser (Phase 6): Spiegelung in halber Qualität, Helfer und Wetter-Partikel fehlen darin
+    this.water = new WaterSystem(this.renderer, this.scene, this.world, {
+      sky: () => this.weather.skyColors,
+      hidden: () => [...this.weather.passHidden, this.grid],
+    });
+    this.water.setReflectionQuality(1);
     setFoliageRenderer(this.renderer);
 
     // Raster: 1-m-Linien + 10-m-Linien
@@ -173,6 +181,7 @@ export class Viewport {
     const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4, depthTexture: new THREE.DepthTexture(1, 1, THREE.FloatType) });
     this.composer = new EffectComposer(this.renderer, rt);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.composer.addPass(new WaterPass(this.scene, this.camera));
     this.composer.addPass(new VolumePass(this.scene, this.camera));
     volumeFX.setLamp(null);
     this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.55, 0.5, 1.0);
@@ -1114,6 +1123,8 @@ export class Viewport {
     }
     this.weather.update(dt, t, this.camera);
     this.weather.render(this.camera, dt);
+    this.water.update(dt, this.camera);
+    this.water.renderReflection(this.camera);
     // Straßen formen das Gelände (vor dem Landscape-Update, damit neue Höhen sofort sichtbar sind)
     updateDeforms();
     updateLandscapes(this.camera);

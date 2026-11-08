@@ -85,16 +85,28 @@ const smooth = (x: number) => x * x * (3 - 2 * x);
  * Straßen-Verformung: Mittellinie (Welt) mit halber Breite je Stützstelle. Innerhalb der Breite wird das Gelände
  * auf `lower` unter die Mittellinie gezogen, über `shoulder` Meter (Böschung) weich ins Gelände übergeblendet.
  */
-export function roadDeform(d: LandscapeData, origin: THREE.Vector3, line: THREE.Vector3[], half: number[], shoulder: number, lower: number): HeightDeform | null {
+interface LineField {
+  rect: { x: number; y: number; w: number; h: number };
+  size: number;
+  /** Abstand zum Rand der Linie (negativ = innen) */
+  dist: Float32Array;
+  /** Höhe der Mittellinie am nächsten Punkt (lokal) */
+  ly: Float32Array;
+  /** halbe Breite am nächsten Punkt */
+  hw: Float32Array;
+}
+
+/** Für jeden Gitterpunkt in Reichweite: nächster Punkt einer Mittellinie mit variabler Breite */
+function lineField(d: LandscapeData, origin: THREE.Vector3, line: THREE.Vector3[], half: number[], reach: number): LineField | null {
   const n = line.length;
   if (n < 2) return null;
   const q = d.quadSize;
   let maxHalf = 0;
   for (const h of half) maxHalf = Math.max(maxHalf, h);
-  const pad = maxHalf + shoulder + q;
+  const pad = maxHalf + reach + q;
   // lokale Mittellinie
   const lx = new Float32Array(n);
-  const ly = new Float32Array(n);
+  const lyl = new Float32Array(n);
   const lz = new Float32Array(n);
   let x0 = Infinity;
   let x1 = -Infinity;
@@ -102,7 +114,7 @@ export function roadDeform(d: LandscapeData, origin: THREE.Vector3, line: THREE.
   let z1 = -Infinity;
   for (let i = 0; i < n; i++) {
     lx[i] = line[i].x - origin.x;
-    ly[i] = line[i].y - origin.y;
+    lyl[i] = line[i].y - origin.y;
     lz[i] = line[i].z - origin.z;
     x0 = Math.min(x0, lx[i]);
     x1 = Math.max(x1, lx[i]);
@@ -116,11 +128,11 @@ export function roadDeform(d: LandscapeData, origin: THREE.Vector3, line: THREE.
     h: Math.ceil(d.toGridZ(z1 + pad)) - Math.floor(d.toGridZ(z0 - pad)) + 1,
   });
   if (!rect) return null;
-  // Speicher begrenzen (sehr lange Straßen über riesige Landscapes)
+  // Speicher begrenzen (sehr lange Linien über riesige Landscapes)
   if (rect.w * rect.h > 64e6) return null;
   const size = rect.w * rect.h;
-  const target = new Float32Array(size);
-  const weight = new Float32Array(size);
+  const ly = new Float32Array(size);
+  const hw = new Float32Array(size);
   const dist = new Float32Array(size).fill(Infinity);
   for (let i = 0; i < n - 1; i++) {
     const ax = lx[i];
@@ -128,7 +140,7 @@ export function roadDeform(d: LandscapeData, origin: THREE.Vector3, line: THREE.
     const vx = lx[i + 1] - ax;
     const vz = lz[i + 1] - az;
     const len2 = vx * vx + vz * vz;
-    const r = Math.max(half[i], half[i + 1]) + shoulder + q;
+    const r = Math.max(half[i], half[i + 1]) + reach + q;
     const gx0 = Math.max(rect.x, Math.floor(d.toGridX(Math.min(ax, ax + vx) - r)));
     const gx1 = Math.min(rect.x + rect.w - 1, Math.ceil(d.toGridX(Math.max(ax, ax + vx) + r)));
     const gz0 = Math.max(rect.y, Math.floor(d.toGridZ(Math.min(az, az + vz) - r)));
@@ -142,19 +154,61 @@ export function roadDeform(d: LandscapeData, origin: THREE.Vector3, line: THREE.
         u = u < 0 ? 0 : u > 1 ? 1 : u;
         const dx = px - (ax + vx * u);
         const dz = pz - (az + vz * u);
-        const dd = Math.sqrt(dx * dx + dz * dz) - (half[i] * (1 - u) + half[i + 1] * u);
+        const h = half[i] * (1 - u) + half[i + 1] * u;
+        const dd = Math.sqrt(dx * dx + dz * dz) - h;
         const j = row + gx;
         if (dd < dist[j]) {
           dist[j] = dd;
-          target[j] = ly[i] * (1 - u) + ly[i + 1] * u - lower;
+          ly[j] = lyl[i] * (1 - u) + lyl[i + 1] * u;
+          hw[j] = h;
         }
       }
     }
   }
+  return { rect, size, dist, ly, hw };
+}
+
+export function roadDeform(d: LandscapeData, origin: THREE.Vector3, line: THREE.Vector3[], half: number[], shoulder: number, lower: number): HeightDeform | null {
+  const f = lineField(d, origin, line, half, shoulder);
+  if (!f) return null;
+  const { rect, size, dist, ly } = f;
+  const target = new Float32Array(size);
+  const weight = new Float32Array(size);
   let any = false;
   for (let j = 0; j < size; j++) {
     const dd = dist[j];
     const w = dd <= 0 ? 1 : shoulder > 0 && dd < shoulder ? 1 - smooth(dd / shoulder) : 0;
+    weight[j] = w;
+    target[j] = ly[j] - lower;
+    if (w > 0) any = true;
+  }
+  return any ? { rect, target, weight, order: 0 } : null;
+}
+
+/**
+ * Flussbett: innen eine Mulde bis `depth` unter den Wasserspiegel (Parabel), am Rand knapp über dem Wasser,
+ * außen eine Böschung, die über `bank` Meter ins gemalte Gelände übergeht. `line` = Wasserspiegel (Welt).
+ */
+export function riverDeform(d: LandscapeData, origin: THREE.Vector3, line: THREE.Vector3[], half: number[], bank: number, depth: number): HeightDeform | null {
+  const f = lineField(d, origin, line, half, bank);
+  if (!f) return null;
+  const { rect, size, dist, ly, hw } = f;
+  const target = new Float32Array(size);
+  const weight = new Float32Array(size);
+  const rim = 0.15;
+  let any = false;
+  for (let j = 0; j < size; j++) {
+    const dd = dist[j];
+    if (!Number.isFinite(dd)) continue;
+    let w = 0;
+    if (dd <= 0) {
+      const t = Math.min(1, (dd + hw[j]) / Math.max(hw[j], 1e-3));
+      target[j] = ly[j] + rim - (depth + rim) * (1 - t * t);
+      w = 1;
+    } else if (bank > 0 && dd < bank) {
+      target[j] = ly[j] + rim;
+      w = 1 - smooth(dd / bank);
+    }
     weight[j] = w;
     if (w > 0) any = true;
   }

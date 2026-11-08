@@ -21,10 +21,12 @@ import { browserBlobs } from '../world/blobStore.ts';
 import { createLandscapeMode } from './modes/landscape.ts';
 import { createFoliageMode } from './modes/foliage.ts';
 import { createSplinesMode, installSplineAttachments } from './modes/splines.ts';
+import { createWaterMode } from './modes/water.ts';
 import { createModelingMode } from './modes/modeling.ts';
 import { clearFoliageCache, flushFoliage } from '../world/foliage/asset.ts';
 import { LoadingScreen } from '../ui/loadingScreen.ts';
 import { models } from './models.ts';
+import { setActionHost } from './assetAction.ts';
 import { modelLabel } from '../world/modelStore.ts';
 import type { Modeler } from './modeler/modeler.ts';
 
@@ -57,6 +59,7 @@ const status = (msg: string, error = false) => {
 const viewportEl = document.getElementById('viewport')!;
 const viewport = new Viewport(viewportEl, state);
 viewport.onStatus = status;
+setActionHost({ state, viewport, status });
 const outliner = new Outliner(document.getElementById('outliner')!, state);
 const details = new DetailsPanel(document.getElementById('details')!, state);
 const content = new ContentBrowser(document.getElementById('content')!);
@@ -86,6 +89,7 @@ modes.register(createLandscapeMode({ state, viewport, status: (m, err) => status
 modes.register(createFoliageMode({ state, viewport, status: (m, err) => status(m, err) }));
 modes.register(createModelingMode({ state, viewport, status: (m, err) => status(m, err) }));
 modes.register(createSplinesMode({ state, viewport, status: (m, err) => status(m, err) }));
+modes.register(createWaterMode({ state, viewport, status: (m, err) => status(m, err) }));
 // Kabel hängen an Strommasten: Punkte folgen, wenn ein Mast bewegt wird
 installSplineAttachments(state);
 // Entwicklung: Zugriff für automatisierte Tests im Browser

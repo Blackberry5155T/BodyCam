@@ -25,13 +25,17 @@ import { Weather, WEATHER_OPTIONS, type ReflectionQuality } from './world/weathe
 import { WEATHER_TYPE, weatherWorld } from './world/weatherObject.ts';
 import { volumeFX } from './world/volumetrics.ts';
 import { VolumePass } from './rendering/volumePass.ts';
+import { GodRaysPass } from './rendering/godRaysPass.ts';
 import { PhysicsWorld, initPhysics } from './physics/physics.ts';
 import { LandscapeRenderer, landscapeSurfaceOf, surfaceAtWorld, updateLandscapes } from './world/landscape/render.ts';
 import { setFoliageQuality, setFoliageRenderer, updateFoliage, updateFoliageColliders } from './world/foliage/render.ts';
 import { setGrassEnabled, updateGrass } from './world/foliage/grass.ts';
 import { weatherSurface, type SurfaceId } from './world/surfaces.ts';
 import { roadSurfaceAt } from './world/splines/zones.ts';
-import { playFootstep, playLanding, unlockAudio } from './audio/footsteps.ts';
+import { playFootstep, playLanding, playWater, setAudioUnderwater, unlockAudio } from './audio/footsteps.ts';
+import { WaterPass, WaterSystem } from './world/water/system.ts';
+import { rayWater, waterImpulse, waterSplash } from './world/water/registry.ts';
+import { DynamicProps } from './physics/dynamicProps.ts';
 import { landscapeOf } from './world/landscape/asset.ts';
 import { SCALE } from './world/collision.ts';
 import { LoadingScreen } from './ui/loadingScreen.ts';
@@ -50,6 +54,9 @@ const TERMINAL_RANGE = 3.2;
 const INTERACT_RANGE = 3.2;
 // Basiswerte des Bodycam-Shaders (Einstellungen skalieren diese)
 const LENS = { distortion: 0.24, aberration: 0.007, grain: 0.075, vignette: 0.8 };
+const _wsp = new THREE.Vector3();
+/** Wassertropfen auf der Linse nach dem Auftauchen (1 → 0) */
+let lensWater = 0;
 
 const app = document.getElementById('app')!;
 const blocker = document.getElementById('blocker')!;
@@ -186,14 +193,76 @@ const applyWeather = () => {
   weather.apply(weatherWorld(world, weatherNode.data, weatherQuat));
 };
 applyWeather();
+// Wasser (Phase 6): See/Fluss/Meer, Spiegelung, Wellenringe, Spritzer; Spielerkörper fehlt in der Spiegelung
+const water = new WaterSystem(renderer, scene, level.world, {
+  sky: () => weather.skyColors,
+  hidden: () => [...new Set([...weather.passHidden, body.root])],
+});
+// Simulierte Props (Fässer, Kisten): Rapier-Körper mit Auftrieb und Strömung
+const dynProps = new DynamicProps(physics, level.nodes, level.colliders);
+dynProps.onSplash = (s) => playWater('splash', s.strength * 0.8);
+// Dev: Zugriff für Tests/Konsole
+if (import.meta.env.DEV) (window as unknown as { __game: unknown }).__game = { player, body, water, dynProps, camera, scene };
 // Oberflächen (Landscape-Layer, Wetter: nasse Erde → Schlamm, Schneedecke): Schritte und Einschläge
 unlockAudio();
 player.onFootstep = (kind, feet, speed, crouching) => {
+  const pw = player.water;
+  if (pw.state === 'wade' && pw.depth > 0.04) {
+    const k = Math.min(1, pw.depth / 0.8 + speed * 0.06) * (crouching ? 0.6 : 1);
+    const at = _wsp.set(feet.x, pw.surface, feet.z);
+    playWater(kind === 'land' ? 'splash' : 'step', kind === 'land' ? Math.min(1, speed / 6) : k);
+    waterSplash(at, (kind === 'land' ? 1.2 : 0.35) + k * 0.6);
+    waterImpulse(feet.x, feet.z, 0.35 + pw.depth * 0.3, -0.03 - k * 0.04);
+    if (pw.depth > 0.3) return; // tiefer: nur noch Wasser zu hören
+  }
   // Straßen-Belag vor dem Gelände darunter
   const ls = roadSurfaceAt(feet) ?? surfaceAtWorld(feet);
   const surface = ls ? weatherSurface(ls, weather.wetness, weather.snowCover) : 'beton';
   if (kind === 'land') playLanding(surface, speed, crouching);
   else playFootstep(surface, speed, crouching);
+};
+// Ereignisse beim Schwimmen/Tauchen
+player.onWater = (kind, pos, strength) => {
+  switch (kind) {
+    case 'enter':
+      playWater('splash', strength);
+      waterSplash(pos, 0.8 + strength * 2);
+      waterImpulse(pos.x, pos.z, 1 + strength, -0.1 - strength * 0.2);
+      break;
+    case 'stroke':
+      playWater('stroke', strength);
+      waterSplash(pos, 0.3 + strength * 0.4);
+      waterImpulse(pos.x, pos.z, 0.7, -0.04 - strength * 0.04);
+      break;
+    case 'dive':
+      playWater('dive', strength);
+      waterImpulse(pos.x, pos.z, 0.8, -0.08);
+      break;
+    case 'surface':
+      playWater('step', strength);
+      waterSplash(pos, 0.4);
+      waterImpulse(pos.x, pos.z, 0.7, 0.05);
+      lensWater = 1; // Tropfen auf der Linse nach dem Auftauchen
+      break;
+  }
+};
+// Keine Luft: im Trainingsmodus Schaden, sonst nach kurzer Zeit zurück zum Spawn
+let drownTime = 0;
+player.onDrown = (dt) => {
+  drownTime += dt;
+  if (training) {
+    if (drownTime >= 1) {
+      drownTime -= 1;
+      training.damagePlayer(12);
+    }
+  } else if (drownTime > 3) {
+    drownTime = 0;
+    glitch = 1;
+    player.teleportFeet(new THREE.Vector3(level.spawn.x, level.spawn.y - PLAYER_EYE + 0.05, level.spawn.z), level.spawnYaw);
+    messageEl.textContent = 'Ertrunken';
+    messageEl.classList.remove('hidden');
+    messageTimer = 2.5;
+  }
 };
 shooter.surfaceOf = (o, p) => {
   // Foliage (Bäume, Felsen): Oberfläche des Typs
@@ -368,7 +437,13 @@ const composer = new EffectComposer(renderer, renderTarget);
 composer.setPixelRatio(pixelRatio());
 composer.setSize(window.innerWidth, window.innerHeight);
 composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new WaterPass(scene, camera));
 composer.addPass(new VolumePass(scene, camera));
+// God-Rays: Sonnenstrahlen durch Himmelslücken (vor Bloom, damit sie mitleuchten)
+const godRays = new GodRaysPass(camera, level.world.sun);
+godRays.strength = settings.data.godRays;
+godRays.enabled = settings.data.godRays > 0;
+composer.addPass(godRays);
 const BLOOM_BASE_STRENGTH = 0.55;
 const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), BLOOM_BASE_STRENGTH, 0.5, 1.0);
 composer.addPass(bloom);
@@ -438,6 +513,10 @@ const applySetting = (key: keyof SettingsData) => {
     case 'bloom':
       bloom.enabled = d.bloom;
       break;
+    case 'godRays':
+      godRays.strength = d.godRays;
+      godRays.enabled = d.godRays > 0;
+      break;
     case 'bloomStrength':
       bloom.strength = BLOOM_BASE_STRENGTH * d.bloomStrength;
       break;
@@ -449,6 +528,7 @@ const applySetting = (key: keyof SettingsData) => {
       break;
     case 'reflections':
       weather.setReflectionQuality(d.reflections as ReflectionQuality);
+      water.setReflectionQuality(d.reflections as ReflectionQuality);
       break;
     case 'volumetrics':
       volumeFX.setQuality(d.volumetrics);
@@ -513,7 +593,18 @@ window.addEventListener('mousedown', (e) => {
   if (player.hasFocus || training?.playerDead) return;
   shots++;
   const result = shooter.fire(camera, body.getMuzzle(camera));
-  training?.playerShot(camera.getWorldPosition(new THREE.Vector3()), camera.getWorldDirection(new THREE.Vector3()), result);
+  const shotFrom = camera.getWorldPosition(new THREE.Vector3());
+  const shotDir = camera.getWorldDirection(new THREE.Vector3());
+  training?.playerShot(shotFrom, shotDir, result);
+  // Kugel durchschlägt die Wasseroberfläche (Kamera über Wasser): Fontäne + Wellenring
+  if (water.underwater === 0) {
+    const wp = rayWater(shotFrom, shotDir, result.hit ? result.distance! : 150);
+    if (wp) {
+      waterSplash(wp, 1.1, shotDir.clone().multiplyScalar(-1.5).setY(4));
+      waterImpulse(wp.x, wp.z, 0.3, -0.12);
+    }
+  }
+  if (result.hit && result.point) dynProps.hit(result.object, result.point, shotDir);
   player.kick();
   body.kick();
   glitch = Math.min(1, glitch + 0.55);
@@ -635,6 +726,73 @@ function grassBenders(): THREE.Vector3[] {
   return benders;
 }
 
+// --- Wasser: Unterwasser-Nebel/Farbe, Atemluft-Anzeige, Bugwelle des Spielers ---
+const WATER_LABEL = { none: '', wade: 'waten', swim: 'schwimmen', dive: 'tauchen' };
+const uwFog = new THREE.Fog(0x103038, 0, 12);
+const uwColor = new THREE.Color(0x103038);
+const uwBg = new THREE.Color();
+let uwBlend = 0;
+let uwActive = false;
+let savedBg: THREE.Scene['background'] = null;
+let wakeTimer = 0;
+const breathEl = document.createElement('div');
+breathEl.style.cssText =
+  'position:absolute;bottom:16vh;left:50%;transform:translateX(-50%);width:180px;height:5px;border:1px solid rgba(232,232,224,.55);display:none;pointer-events:none';
+const breathBar = document.createElement('i');
+breathBar.style.cssText = 'position:absolute;left:1px;top:1px;bottom:1px;background:#bfe3ff;transition:background .2s';
+breathEl.appendChild(breathBar);
+app.parentElement!.appendChild(breathEl);
+
+function updateWaterFx(dt: number): void {
+  const pw = player.water;
+  // Unterwasser: Kamera unter der Oberfläche → Nebel in Wasserfarbe, Sichtweite = Sichttiefe des Gewässers
+  const cw = water.cameraWater;
+  const under = water.underwater > 0.02 && !!cw?.body;
+  if (under && cw?.body) {
+    const look = cw.body.look;
+    const amb = level.world.hemi.intensity * 0.6 + 0.25;
+    uwColor.copy(look.color).multiplyScalar(Math.min(1.2, amb) * (1 - Math.min(0.6, water.underwater * 0.04)));
+    uwFog.color.copy(uwColor);
+    uwFog.near = 0;
+    uwFog.far = Math.max(2.5, look.clarity * (1.2 - look.murk * 0.6));
+  }
+  if (under !== uwActive) {
+    uwActive = under;
+    if (under) {
+      savedBg = scene.background;
+      scene.fog = uwFog;
+      scene.background = uwBg;
+    } else {
+      scene.fog = settings.data.fogEnabled ? fog : null;
+      scene.background = savedBg;
+    }
+  }
+  if (under) uwBg.copy(uwColor);
+  uwBlend = THREE.MathUtils.damp(uwBlend, under ? 1 : 0, 12, dt);
+  setAudioUnderwater(uwBlend);
+  if (pw.breath >= 0.999) drownTime = 0;
+
+  // Atemluft
+  const showBreath = pw.breath < 0.995;
+  breathEl.style.display = showBreath && player.isLocked ? 'block' : 'none';
+  if (showBreath) {
+    breathBar.style.width = `${Math.max(0, pw.breath) * 176}px`;
+    breathBar.style.background = pw.breath < 0.25 ? '#e3242b' : '#bfe3ff';
+  }
+
+  // Bugwelle/Wellenringe beim Waten und Schwimmen
+  if (pw.state !== 'none' && pw.state !== 'dive') {
+    const v = player.velocity;
+    const sp = Math.hypot(v.x - pw.flowX, v.z - pw.flowZ);
+    wakeTimer -= dt;
+    if (sp > 0.3 && wakeTimer <= 0) {
+      wakeTimer = 0.12;
+      const f = player.feet;
+      waterImpulse(f.x, f.z, pw.state === 'wade' ? 0.4 : 0.6, -Math.min(0.06, sp * 0.015));
+    }
+  }
+}
+
 renderer.setAnimationLoop(() => {
   timer.update();
   const dt = Math.min(timer.getDelta(), 0.05);
@@ -644,6 +802,7 @@ renderer.setAnimationLoop(() => {
   updateFoliageColliders(player.position, level.colliders);
   physics.sync(level.colliders);
   physics.step(dt);
+  dynProps.update(dt);
   player.update(dt);
   shooter.update(dt);
   // Volumetrik: Spieler verdrängt Nebel/Rauch, Wind/Regen vom Wetter, Lichter für die Streuung
@@ -669,6 +828,8 @@ renderer.setAnimationLoop(() => {
   if (weatherNode && !weatherNode.root.quaternion.equals(weatherQuat)) applyWeather();
   weather.trackFeet(player.feet, anim.onGround);
   weather.update(dt, t, camera);
+  water.update(dt, camera);
+  updateWaterFx(dt);
 
   // Blickt der Spieler auf das Terminal oder ein benutzbares Map-Objekt?
   lookingAtTerminal = false;
@@ -723,7 +884,12 @@ renderer.setAnimationLoop(() => {
   glitch = Math.max(0, glitch - dt * 5);
   u.uTime.value = t;
   u.uGlitch.value = glitch;
-  u.uRainLens.value = weather.lensRain;
+  lensWater = Math.max(0, lensWater - dt / 5);
+  u.uRainLens.value = Math.max(weather.lensRain, Math.min(1, lensWater * 1.6));
+  u.uUnderwater.value = uwBlend;
+  u.uWaterTint.value.copy(uwColor);
+  godRays.overcast = level.world.cloudiness;
+  godRays.fade = 1 - uwBlend;
 
   // Dev-Third-Person: nur fürs Rendern hinter den Spieler, danach Bodycam-Pose zurück
   const tp = thirdPerson?.enabled && !uiActive();
@@ -733,6 +899,7 @@ renderer.setAnimationLoop(() => {
   updateFoliage(camera, dt, weather.windVector);
   updateGrass(camera, dt, weather.windVector, grassBenders());
   weather.render(camera, dt);
+  water.renderReflection(camera);
   composer.render(dt);
   if (tp) thirdPerson!.restore(camera);
   if (firstFrame) {
@@ -761,5 +928,6 @@ renderer.setAnimationLoop(() => {
     `<br>` +
     `Schüsse ${shots} · ${lastShot}<br>` +
     `Haltung ${player.isCrouching ? 'geduckt' : 'stehend'}${player.isAiming ? ' · zielt' : ''}` +
-    (player.coverState !== 'none' ? ` · Deckung: ${COVER_LABEL[player.coverState]}` : '');
+    (player.coverState !== 'none' ? ` · Deckung: ${COVER_LABEL[player.coverState]}` : '') +
+    (player.water.state !== 'none' ? `<br>Wasser: ${WATER_LABEL[player.water.state]} · Tiefe ${player.water.depth.toFixed(2)} m` : '');
 });

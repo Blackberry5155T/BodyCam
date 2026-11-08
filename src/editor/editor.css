@@ -1881,3 +1881,40 @@ select {
   font-size: 11px;
   line-height: 1.4;
 }
+/* Knopf-Eigenschaften (z. B. Wasserquelle: Simulation berechnen) */
+.prop-row:has(> .value > .action-row) {
+  grid-template-columns: 0 1fr;
+}
+.action-row {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 3px 0;
+  min-width: 0;
+}
+.action-row .btn {
+  justify-content: center;
+}
+.action-row .btn:disabled {
+  opacity: 0.75;
+  cursor: progress;
+}
+.action-meter {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-0);
+  overflow: hidden;
+}
+.action-meter > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.12s linear;
+}
+.action-note {
+  font-size: 11px;
+  color: var(--text-dim, #9a9a9a);
+  line-height: 1.35;
+}

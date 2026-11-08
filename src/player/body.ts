@@ -34,6 +34,26 @@ export interface BodyAnimState {
   lean: number; // seitliches Vorbeugen der Kamera in m (+ = rechts)
   crouching: boolean; // Schleich-Taste gehalten
   cover: BodyCover; // Deckungszustand (über Kante / seitlich vorbeugen)
+  water: number; // Wassertiefe an den Füßen (m, 0 = trocken)
+  swim: number; // 0..1 Schwimmen
+}
+
+/** Nasse Kleidung: unterhalb der Wasserlinie (Welt-Y) dunkler und glänzender */
+function patchWet(mat: THREE.MeshStandardMaterial, wetY: { value: number }): void {
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uWetY = wetY;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying float vWetH;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\nvWetH = (modelMatrix * vec4(transformed, 1.0)).y;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vWetH;\nuniform float uWetY;')
+      .replace(
+        '#include <color_fragment>',
+        '#include <color_fragment>\nfloat wetK = smoothstep(uWetY + 0.04, uWetY - 0.04, vWetH);\ndiffuseColor.rgb *= mix(1.0, 0.5, wetK);',
+      )
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.3, wetK);');
+  };
+  mat.customProgramCacheKey = () => 'body-wet';
 }
 
 const STAND_EYE = SCALE.playerHeight; // Augenhöhe stehend (wie im Controller)
@@ -200,6 +220,9 @@ export class PlayerBody {
   private lastRootY = Number.NaN;
   private lampIntensity = FLASHLIGHT_INTENSITY;
   private meshes: THREE.Mesh[] = [];
+  /** Wasserlinie der nassen Kleidung (Welt-Y), trocknet langsam ab */
+  private wetY = { value: -1e4 };
+  private wetH = -1;
 
   constructor(
     scene: THREE.Scene,
@@ -212,6 +235,7 @@ export class PlayerBody {
     const pants = new THREE.MeshStandardMaterial({ color: npc ? 0x3a3a2c : 0x2c2f33, roughness: 0.9 });
     const gloves = new THREE.MeshStandardMaterial({ color: 0x161616, roughness: 0.7 });
     const boots = new THREE.MeshStandardMaterial({ color: 0x121212, roughness: 0.6 });
+    for (const m of [jacket, vest, pants, gloves, boots]) patchWet(m, this.wetY);
     // Kopf: in der eigenen Kamera unsichtbar, wirft aber Schatten
     // (Shadow-Pass nutzt eigenes Depth-Material, colorWrite/depthWrite werden dort ignoriert)
     const shadowOnly = new THREE.MeshStandardMaterial({ colorWrite: false, depthWrite: false });
@@ -378,6 +402,10 @@ export class PlayerBody {
       this.grade = damp(this.grade, g, 5, dt);
     }
     this.lastRootY = rootY;
+
+    // Nasse Kleidung: Wasserlinie (relativ zu den Füßen) folgt sofort nach oben, trocknet langsam (Saugeffekt +5 cm)
+    this.wetH = Math.max(this.wetH - dt * 0.015, s.water > 0.02 ? s.water + 0.05 : -1);
+    this.wetY.value = rootY + this.wetH;
 
     // --- Zustandsblends ---
     this.airBlend = damp(this.airBlend, s.onGround ? 0 : 1, 10, dt);

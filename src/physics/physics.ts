@@ -26,6 +26,8 @@ const groups = (member: number, filter: number) => ((member & 0xffff) << 16) | (
 export const WORLD_QUERY = groups(0xffff, GROUP_WORLD);
 /** Sichtlinie der KI: Welt + Sicht-Blocker */
 export const SIGHT_QUERY = groups(0xffff, GROUP_WORLD | GROUP_SIGHT);
+/** Mitgliedschaft „Welt“ für eigene Collider (z. B. simulierte Props): Spieler und Abfragen treffen sie */
+export const WORLD_MEMBER = groups(GROUP_WORLD, 0xffff);
 
 const GROUND_HALF = 50000; // 100 × 100 km
 

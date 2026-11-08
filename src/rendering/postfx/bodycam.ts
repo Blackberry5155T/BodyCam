@@ -15,6 +15,9 @@ export const BodycamShader = {
     uGlitch: { value: 0 },
     uExposure: { value: 1 },
     uRainLens: { value: 0 },
+    // Unterwasser (0..1) und Wasserfarbe
+    uUnderwater: { value: 0 },
+    uWaterTint: { value: new THREE.Color(0x103038) },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -34,6 +37,8 @@ export const BodycamShader = {
     uniform float uGlitch;
     uniform float uExposure;
     uniform float uRainLens;
+    uniform float uUnderwater;
+    uniform vec3 uWaterTint;
     varying vec2 vUv;
 
     float hash(vec2 p) {
@@ -85,6 +90,11 @@ export const BodycamShader = {
         dropMask = max(d1.z, d2.z);
       }
 
+      // Unterwasser: Bild wabert (Lichtbrechung)
+      if (uUnderwater > 0.001) {
+        uv += vec2(sin(uv.y * 22.0 + uTime * 2.1), cos(uv.x * 18.0 + uTime * 1.7)) * 0.0035 * uUnderwater;
+      }
+
       // Signal-Glitch: einzelne Zeilenblöcke horizontal versetzt
       if (uGlitch > 0.001) {
         float row = floor(uv.y * 56.0);
@@ -99,6 +109,16 @@ export const BodycamShader = {
       col.r = texture2D(tDiffuse, 0.5 + d * (1.0 + ab)).r;
       col.g = texture2D(tDiffuse, base).g;
       col.b = texture2D(tDiffuse, 0.5 + d * (1.0 - ab)).b;
+      if (uUnderwater > 0.001) {
+        // Unschärfe (4 Abgriffe) und Einfärbung: Rot verschwindet zuerst, Licht wird grün-blau
+        vec2 px = 2.5 / uResolution * uUnderwater;
+        vec3 blur = texture2D(tDiffuse, base + vec2(px.x, px.y)).rgb + texture2D(tDiffuse, base + vec2(-px.x, px.y)).rgb
+          + texture2D(tDiffuse, base + vec2(px.x, -px.y)).rgb + texture2D(tDiffuse, base + vec2(-px.x, -px.y)).rgb;
+        col = mix(col, blur * 0.25, 0.65 * uUnderwater);
+        float l = dot(col, vec3(0.299, 0.587, 0.114));
+        vec3 tint = normalize(uWaterTint + 0.02) * 1.2;
+        col = mix(col, (l * 0.9 + 0.05) * tint * vec3(0.7, 1.0, 1.05), 0.6 * uUnderwater);
+      }
 
       vec2 edgeDist = min(base, 1.0 - base);
       float mask = smoothstep(0.0, 0.006, min(edgeDist.x, edgeDist.y));
@@ -118,7 +138,7 @@ export const BodycamShader = {
       float aspect = uResolution.x / uResolution.y;
       vec2 vc = (vUv - 0.5) * vec2(aspect, 1.0);
       float vig = smoothstep(1.1, 0.3, length(vc));
-      col *= mix(1.0, vig, uVignette);
+      col *= mix(1.0, vig, min(1.0, uVignette + uUnderwater * 0.35));
 
       // Sensorrauschen, stärker in dunklen Bereichen
       float g = hash(vUv * uResolution + fract(uTime * 7.13) * 1000.0) - 0.5;

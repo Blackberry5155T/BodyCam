@@ -280,6 +280,16 @@ export class TrainingMode {
     }
   }
 
+  /** Schaden ohne Gegner (z. B. Ertrinken) */
+  damagePlayer(amount: number): void {
+    if (this.dead) return;
+    this.health -= amount;
+    this.regenDelay = REGEN_DELAY;
+    this.o.onPlayerHurt?.(0.2 + amount / 40);
+    this.hud.flash(amount / 30);
+    if (this.health <= 0) this.die();
+  }
+
   private hurtPlayer(amount: number, npc: Npc): void {
     if (this.dead) return;
     const dmg = amount * (0.75 + 0.45 * this.world.difficulty);

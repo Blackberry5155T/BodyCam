@@ -4,6 +4,7 @@ import type { Action } from '../core/settings.ts';
 import type { Settings } from '../core/settings.ts';
 import { SCALE } from '../world/collision.ts';
 import { RAPIER, WORLD_QUERY, type PhysicsWorld } from '../physics/physics.ts';
+import { waterAt, type WaterSample } from '../world/water/registry.ts';
 
 const WALK_SPEED = 3.2; // m/s, grob an realistischem Gehtempo orientiert
 const SPRINT_SPEED = 6.0;
@@ -32,6 +33,32 @@ const COVER_REACH = 1.3; // so weit vor dem Körpermittelpunkt wird nach Deckung
 const PEEK_CLEARANCE = 0.2; // Kamera/Waffe so weit über die Deckungskante heben
 const LEAN_DIST = 0.5; // seitliches Vorbeugen an der Deckung vorbei
 const LEAN_PROBE_RADIUS = 0.15;
+
+// Wasser (Phase 6): Waten → Schwimmen ab Brusthöhe → Tauchen
+const SWIM_DEPTH = 1.35; // Wassertiefe an den Füßen, ab der geschwommen wird
+const SWIM_EXIT = 1.15; // mit Bodenkontakt darunter wieder waten (Hysterese)
+const WADE_SLOW = 0.45; // Tempo-Faktor kurz vor Schwimmtiefe
+const SWIM_SPEED = 1.5;
+const SWIM_SPRINT = 2.4;
+const DIVE_SPEED = 1.6; // Auf-/Abtauchen (Springen/Ducken)
+const SWIM_EYE = 0.22; // Augen über der Oberfläche beim Schwimmen
+const SWIM_JUMP = 4.2; // Hochziehen an einer Kante (Springen an der Oberfläche)
+const BREATH_TIME = 30; // Sekunden Luft unter Wasser
+const BREATH_REFILL = 4; // Sekunden bis wieder voll
+
+export type WaterState = 'none' | 'wade' | 'swim' | 'dive';
+
+export interface PlayerWater {
+  state: WaterState;
+  /** Wassertiefe an den Füßen (m, 0 = trocken) */
+  depth: number;
+  /** Wasseroberfläche (Welt-Y), NaN ohne Wasser */
+  surface: number;
+  /** Atemluft 0..1 */
+  breath: number;
+  flowX: number;
+  flowZ: number;
+}
 
 /** Eingabequelle: Tastatur/Maus (Input) oder eine KI, die dieselben Aktionen „drückt“ */
 export interface ControlInput {
@@ -92,6 +119,22 @@ export class PlayerController {
   onFootstep?: (kind: 'step' | 'land', feet: THREE.Vector3, speed: number, crouching: boolean) => void;
   private lastStep = 0;
   private _feet = new THREE.Vector3();
+
+  // Wasser
+  /** Ereignis im Wasser (Spritzer/Geräusch): Eintauchen, Schwimmzug, Abtauchen, Auftauchen; Stärke 0..1 */
+  onWater?: (kind: 'enter' | 'stroke' | 'dive' | 'surface', pos: THREE.Vector3, strength: number) => void;
+  /** keine Luft mehr (wird jeden Frame mit dt aufgerufen) */
+  onDrown?: (dt: number) => void;
+  private waterState: WaterState = 'none';
+  private waterDepth = 0;
+  private waterSurface = NaN;
+  private breath = 1;
+  private swimBlend = 0;
+  private strokePhase = 0;
+  private swimJumpCd = 0;
+  private groundedRaw = true;
+  private ws: WaterSample = { height: 0, base: 0, flowX: 0, flowZ: 0, fade: 1, body: null };
+  private _wpos = new THREE.Vector3();
 
   // Kollision (Rapier): Kapsel von den Füßen bis zur Augenhöhe
   private kcc: RAPIER.KinematicCharacterController;
@@ -193,6 +236,8 @@ export class PlayerController {
   teleport(eye: THREE.Vector3, yaw?: number): void {
     this.position.copy(eye);
     this.velocity.set(0, 0, 0);
+    this.breath = 1;
+    this.waterState = 'none';
     if (yaw !== undefined) this.yaw = this.viewYaw = yaw;
   }
 
@@ -240,6 +285,18 @@ export class PlayerController {
     return this.onGround;
   }
 
+  /** Wasserzustand (Waten/Schwimmen/Tauchen, Atemluft) */
+  get water(): PlayerWater {
+    return {
+      state: this.waterState,
+      depth: this.waterDepth,
+      surface: this.waterSurface,
+      breath: this.breath,
+      flowX: this.waterState === 'none' ? 0 : this.ws.flowX,
+      flowZ: this.waterState === 'none' ? 0 : this.ws.flowZ,
+    };
+  }
+
   /** Augenhöhe über den Füßen (Stehen/Ducken/über Deckung) */
   get eyeHeight(): number {
     return this.height;
@@ -268,11 +325,18 @@ export class PlayerController {
     const down = (a: Action) => active && this.input.down(a);
     const forward = down('forward') ? 1 : down('back') ? -1 : 0;
     const strafe = down('right') ? 1 : down('left') ? -1 : 0;
-    this.crouching = down('crouch');
-    this.aiming = down('aim');
+
+    // Wasser an den Füßen: Zustand Waten/Schwimmen/Tauchen bestimmen
+    const water = this.sampleWater(dt);
+    const swimming = water === 'swim' || water === 'dive';
+    const crouchKey = down('crouch');
+    this.crouching = crouchKey && !swimming;
+    this.aiming = down('aim') && !swimming;
     const sprinting = down('sprint') && forward > 0 && !this.crouching && !this.aiming;
     let speed = sprinting ? SPRINT_SPEED : this.crouching ? CROUCH_SPEED : WALK_SPEED;
     if (this.aiming) speed *= AIM_SPEED_FACTOR;
+    // Waten: je tiefer, desto langsamer
+    if (water === 'wade') speed *= THREE.MathUtils.lerp(1, WADE_SLOW, Math.min(this.waterDepth / SWIM_DEPTH, 1));
     this.sprinting = sprinting;
     if (strafe !== 0) this.leanSide = strafe;
     this.aimBlend = damp(this.aimBlend, this.aiming ? 1 : 0, 12, dt);
@@ -304,15 +368,27 @@ export class PlayerController {
       this.pitch = damp(this.pitch, f.pitch, 6, dt);
     }
 
-    const accel = this.onGround ? GROUND_ACCEL : AIR_ACCEL;
-    this.velocity.x = damp(this.velocity.x, wish.x, accel, dt);
-    this.velocity.z = damp(this.velocity.z, wish.y, accel, dt);
+    if (swimming) {
+      this.swimMotion(dt, forward, strafe, down('sprint') && forward > 0, down('jump'), crouchKey);
+    } else {
+      // Strömung schiebt beim Waten (stärker, je tiefer)
+      if (water === 'wade') {
+        const push = Math.min(this.waterDepth / 1.3, 1) * 0.6;
+        wish.x += this.ws.flowX * push;
+        wish.y += this.ws.flowZ * push;
+      }
+      const accel = this.onGround ? GROUND_ACCEL : AIR_ACCEL;
+      this.velocity.x = damp(this.velocity.x, wish.x, accel, dt);
+      this.velocity.z = damp(this.velocity.z, wish.y, accel, dt);
 
-    if (down('jump') && this.onGround && !this.crouching) {
-      this.velocity.y = JUMP_SPEED;
-      this.onGround = false;
+      if (down('jump') && this.onGround && !this.crouching && (water === 'none' || this.waterDepth < 0.7)) {
+        this.velocity.y = JUMP_SPEED;
+        this.onGround = false;
+      }
+      this.velocity.y += GRAVITY * dt;
+      // Wasser bremst den Fall
+      if (water === 'wade' && this.velocity.y < 0) this.velocity.y *= Math.exp(-Math.min(this.waterDepth, 1.2) * 4 * dt);
     }
-    this.velocity.y += GRAVITY * dt;
 
     // Bewegung über den Rapier-Character-Controller: gleitet an Wänden, steigt Stufen, hält Hänge
     const pos = this.position;
@@ -338,7 +414,13 @@ export class PlayerController {
     }
     this.groundSpeed = Math.hypot(this.velocity.x, this.velocity.z);
 
-    if (grounded && this.velocity.y <= 0) {
+    this.groundedRaw = grounded;
+    if (swimming) {
+      // Schwimmen: kein Bodenkontakt im Sinne von Laufen (keine Schritte/Landungen)
+      if (grounded && this.velocity.y < 0) this.velocity.y = 0;
+      if (this.velocity.y > 0 && moved.y < _move.y * 0.5) this.velocity.y = 0;
+      this.onGround = false;
+    } else if (grounded && this.velocity.y <= 0) {
       this.velocity.y = 0;
       this.onGround = true;
       if (!wasOnGround) {
@@ -437,6 +519,11 @@ export class PlayerController {
       }
     }
 
+    // Schwimmen: Kamera auf Augenhöhe, leichtes Schaukeln im Zugrhythmus
+    const swimTarget = this.waterState === 'swim' || this.waterState === 'dive' ? 1 : 0;
+    this.swimBlend = dt === 0 ? swimTarget : damp(this.swimBlend, swimTarget, 3, dt);
+    const swimBob = this.swimBlend * (Math.sin(t * 1.7) * 0.025 + Math.sin(this.strokePhase * Math.PI * 2) * 0.02) * this.settings.data.cameraShake;
+
     const cam = this.camera;
     const fx = -Math.sin(this.viewYaw) * CAMERA_FORWARD;
     const fz = -Math.cos(this.viewYaw) * CAMERA_FORWARD;
@@ -445,7 +532,7 @@ export class PlayerController {
     const leanZ = -Math.sin(this.viewYaw) * this.lean;
     cam.position.set(
       this.position.x + cos * bobX + fx + leanX,
-      this.position.y - CAMERA_DROP + bobY + breathY + this.landing.value,
+      this.position.y - CAMERA_DROP * (1 - 0.8 * this.swimBlend) + bobY + breathY + this.landing.value + swimBob,
       this.position.z - sin * bobX + fz + leanZ,
     );
     cam.rotation.set(
@@ -485,7 +572,101 @@ export class PlayerController {
       lean: this.lean,
       crouching: this.crouching,
       cover: this.coverState,
+      water: this.waterDepth,
+      swim: this.swimBlend,
     };
+  }
+
+  /**
+   * Wasser an der Spielerposition auswerten: Tiefe an den Füßen, Zustand (mit Hysterese),
+   * Atemluft und Ereignisse (Eintauchen, Ab-/Auftauchen).
+   */
+  private sampleWater(dt: number): WaterState {
+    const pos = this.position;
+    const feetY = pos.y - this.height;
+    const w = waterAt(pos.x, pos.z, this.ws);
+    const prev = this.waterState;
+    const depth = w ? Math.max(0, w.height - feetY) : 0;
+    this.waterDepth = depth;
+    this.waterSurface = w ? w.height : NaN;
+    let state: WaterState;
+    if (!w || depth < 0.03) state = 'none';
+    else if (prev === 'swim' || prev === 'dive') state = depth < SWIM_EXIT && this.groundedRaw ? 'wade' : 'swim';
+    else state = depth >= SWIM_DEPTH ? 'swim' : 'wade';
+    // Tauchen: Augen deutlich unter der Oberfläche
+    if (state === 'swim' && w && pos.y < w.height - 0.12) state = 'dive';
+    this.waterState = state;
+
+    // Ereignisse
+    if (w && this.onWater) {
+      const at = this._wpos.set(pos.x, w.height, pos.z);
+      if (prev === 'none' && state !== 'none' && this.velocity.y < -2.5) this.onWater('enter', at, Math.min(1, -this.velocity.y / 8));
+      else if (prev === 'swim' && state === 'dive') this.onWater('dive', at, 0.5);
+      else if (prev === 'dive' && state !== 'dive') this.onWater('surface', at, 0.4);
+    }
+
+    // Atemluft: Kopf (Kamera) unter Wasser → verbrauchen, sonst auffüllen
+    const head = pos.y - CAMERA_DROP * (1 - 0.8 * this.swimBlend);
+    const under = !!w && head < w.height - 0.03;
+    if (under) this.breath = Math.max(0, this.breath - dt / BREATH_TIME);
+    else this.breath = Math.min(1, this.breath + dt / BREATH_REFILL);
+    if (under && this.breath <= 0) this.onDrown?.(dt);
+    return state;
+  }
+
+  /** Schwimmen/Tauchen: Bewegung in Blickrichtung, Auftrieb an der Oberfläche, Strömung treibt */
+  private swimMotion(dt: number, forward: number, strafe: number, fast: boolean, up: boolean, downKey: boolean): void {
+    const pos = this.position;
+    const v = this.velocity;
+    const surface = this.ws.height;
+    const rest = surface + SWIM_EYE;
+    const diving = this.waterState === 'dive';
+    const sp = fast ? SWIM_SPRINT : SWIM_SPEED;
+    // Unter Wasser (oder steil nach unten blickend) folgt „vorwärts“ dem Blick
+    const pitch = diving || this.pitch < -0.45 ? this.pitch : 0;
+    const cp = Math.cos(pitch);
+    const sin = Math.sin(this.yaw);
+    const cos = Math.cos(this.yaw);
+    let wx = -sin * forward * cp + cos * strafe;
+    let wz = -cos * forward * cp - sin * strafe;
+    let wy = forward * Math.sin(pitch);
+    const len = Math.hypot(wx, wy, wz);
+    if (len > 1) {
+      wx /= len;
+      wy /= len;
+      wz /= len;
+    }
+    wx = wx * sp + this.ws.flowX;
+    wz = wz * sp + this.ws.flowZ;
+    wy = wy * sp + (up ? DIVE_SPEED : 0) - (downKey ? DIVE_SPEED : 0);
+
+    v.x = damp(v.x, wx, 2.5, dt);
+    v.z = damp(v.z, wz, 2.5, dt);
+
+    this.swimJumpCd = Math.max(0, this.swimJumpCd - dt);
+    const atSurface = pos.y > surface - 0.35;
+    if (pos.y > rest + 0.03) {
+      // über der Ruhelage (Hochziehen/Wellen): fallen lassen
+      v.y += GRAVITY * dt;
+    } else if (atSurface && up && this.swimJumpCd === 0 && forward > 0) {
+      // an der Oberfläche: kräftiger Zug nach oben (an Kanten/Stege hochziehen)
+      v.y = SWIM_JUMP;
+      this.swimJumpCd = 0.9;
+    } else if (atSurface && wy >= 0) {
+      // Auftrieb hält die Augen knapp über Wasser
+      v.y = damp(v.y, THREE.MathUtils.clamp((rest - pos.y) * 3, -1.5, 1.5), 4, dt);
+    } else {
+      // Tauchen: langsam nach oben treiben, wenn nichts gedrückt wird
+      v.y = damp(v.y, wy + 0.25, 2.5, dt);
+    }
+
+    // Schwimmzüge (Geräusch/Spritzer an der Oberfläche)
+    const moving = Math.hypot(v.x - this.ws.flowX, v.z - this.ws.flowZ);
+    this.strokePhase += dt * (moving > 0.3 ? 0.55 + moving * 0.25 : 0.25);
+    if (this.strokePhase >= 1) {
+      this.strokePhase -= 1;
+      if (!diving && moving > 0.3) this.onWater?.('stroke', this._wpos.set(pos.x, surface, pos.z), Math.min(1, moving / SWIM_SPRINT));
+    }
   }
 
   /**

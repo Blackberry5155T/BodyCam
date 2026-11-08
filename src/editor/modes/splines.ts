@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { h, numberField, pickFile, toast } from '../ui.ts';
 import { icon } from '../icons.ts';
 import { models } from '../models.ts';
-import type { EditorMode, ModeContext } from './types.ts';
+import { actionButton } from '../assetAction.ts';
+import type { EditorMode, ModeContext, ModeId } from './types.ts';
 import type { EditorState } from '../state.ts';
 import { ASSETS, defaultProps, type PropDef } from '../../world/assets.ts';
 import type { MapObjectData, PropValue } from '../../world/mapFormat.ts';
@@ -103,15 +104,104 @@ function baseHeight(x: number, z: number): number | null {
   return null;
 }
 
-interface Drawing {
-  /** Vorgabe für ein neues Objekt (null = an bestehendes anhängen) */
-  preset: (typeof SPLINE_PRESETS)[number] | null;
-  /** Objekt, an das Punkte angehängt werden */
-  id: string | null;
+/** Vorlage im Modus-Panel („Neu“) */
+export interface SplineModePreset {
+  id: string;
+  label: string;
+  type: string;
+  icon: string;
+  props?: Record<string, PropValue>;
 }
 
-export function createSplinesMode(ctx: ModeContext): EditorMode {
+/**
+ * Konfiguration des Spline-Modus: Splines (Phase 4) und Wasser (Phase 6) teilen sich das Werkzeug,
+ * unterscheiden sich aber in Typen, Vorlagen, Mindest-Punktzahl und Details.
+ */
+export interface SplineModeConfig {
+  id: ModeId;
+  label: string;
+  icon: string;
+  /** Typen, die dieser Modus bearbeitet */
+  types: ReadonlySet<string>;
+  presets: readonly SplineModePreset[];
+  /** Typen, die beim Setzen von Punkten nicht als Untergrund zählen */
+  skip: ReadonlySet<string>;
+  /** Mindest-Punktzahl; 0 = ein Klick setzt das ganze Objekt (Meer) */
+  minPoints(type: string): number;
+  /** geschlossene Kurve */
+  closed(o: MapObjectData): boolean;
+  /** Punkte liegen flach auf Objekthöhe (See); Höhe bestimmt die Objekt-Position */
+  flat?(type: string): boolean;
+  /** Breiten-Faktor je Punkt */
+  pointWidth(type: string): boolean;
+  /** Querneigung je Punkt */
+  pointRoll(type: string): boolean;
+  /** Eigenschaft im Panel zeigen */
+  relevant(o: MapObjectData, p: PropDef): boolean;
+  /** zusätzliche Zeilen unter dem Objekt-Namen */
+  /** Statuszeile nach dem Setzen eines Ein-Klick-Objekts (minPoints 0) */
+  placedNote?(type: string): string;
+  objectRows?(o: MapObjectData, set: (fn: () => void, commit: boolean) => void): (HTMLElement | null | false)[];
+  drawNote: string;
+  emptyNote: string;
+  help: string[];
+}
+
+/** Nur passende Eigenschaften je Art zeigen (Spline-Mesh: Mauer-Material nur bei Mauer …) */
+function splineRelevant(o: MapObjectData, p: PropDef): boolean {
+  if (p.hidden) return false;
+  if (o.type === SPLINEMESH_TYPE) {
+    const k = o.props.profile;
+    if (p.key === 'thickness' || p.key === 'material') return k === 'mauer';
+    if (p.key === 'height') return k === 'mauer' || k === 'zaun';
+    if (p.key === 'spacing') return k === 'leitplanke' || k === 'zaun';
+    if (p.key === 'model') return k === 'modell';
+  }
+  if (o.type === CABLE_TYPE && p.key === 'sag') return o.props.kind !== 'rohr';
+  if (o.type === ROAD_TYPE) {
+    if (p.key === 'curbHeight') return o.props.curbs === true;
+    if (p.key === 'shoulder' || p.key === 'lower') return o.props.deform !== false;
+    if (p.key === 'lineColor') return o.props.markings !== 'none' || o.props.edgeLines !== false;
+  }
+  return true;
+}
+
+export const SPLINES_CONFIG: SplineModeConfig = {
+  id: 'splines',
+  label: 'Splines',
+  icon: 'spline',
+  types: SPLINE_TYPES,
+  presets: SPLINE_PRESETS,
+  skip: SPLINE_TYPES,
+  minPoints: () => 2,
+  closed: (o) => o.props.closed === true,
+  pointWidth: (t) => t === ROAD_TYPE,
+  pointRoll: (t) => t !== CABLE_TYPE,
+  relevant: splineRelevant,
+  drawNote: 'Klicks setzen Punkte (Straßen folgen dem Gelände, Kabel rasten an Strommasten ein). Enter oder Esc beendet.',
+  emptyNote: 'Spline im Viewport anklicken oder oben einen neuen anlegen.',
+  help: [
+    'Punkt ziehen: verschieben (folgt dem Gelände)',
+    'Umschalt + Ziehen: Höhe ändern',
+    'Klick auf die Kurve: Punkt einfügen',
+    'Strg + Klick: Punkt am Ende anhängen',
+    'Entf: Punkt löschen · Esc: Punkt abwählen',
+    'Kabel auf einem Strommast: rastet am Isolator ein und folgt dem Mast',
+  ],
+};
+
+interface Drawing {
+  /** Vorgabe für ein neues Objekt (null = an bestehendes anhängen) */
+  preset: SplineModePreset | null;
+  /** Objekt, an das Punkte angehängt werden */
+  id: string | null;
+  /** Höhen der geklickten Punkte (flache Typen: Wasserspiegel = tiefster Uferpunkt) */
+  heights: number[];
+}
+
+export function createSplinesMode(ctx: ModeContext, cfg: SplineModeConfig = SPLINES_CONFIG): EditorMode {
   const { state, viewport: vp } = ctx;
+  const isFlat = (type: string) => cfg.flat?.(type) === true;
   const panel = h('div', { class: 'mode-panel-body splines-panel' });
   const raycaster = new THREE.Raycaster();
   let active = false;
@@ -139,7 +229,7 @@ export function createSplinesMode(ctx: ModeContext): EditorMode {
 
   function cur(): MapObjectData | undefined {
     const o = state.primary;
-    return o && SPLINE_TYPES.has(o.type) ? o : undefined;
+    return o && cfg.types.has(o.type) ? o : undefined;
   }
   const pointsOf = (o: MapObjectData) => parsePoints(o.props.points);
   const worldOf = (o: MapObjectData, p: SplinePoint) => new THREE.Vector3(p.p[0] + o.pos[0], p.p[1] + o.pos[1], p.p[2] + o.pos[2]);
@@ -192,7 +282,7 @@ export function createSplinesMode(ctx: ModeContext): EditorMode {
    */
   function groundAt(x: number, y: number): { point: THREE.Vector3; id: string | null } {
     const ray = rayAt(x, y);
-    const hit = vp.castSurface(ray, 4000, (_id, type) => SPLINE_TYPES.has(type));
+    const hit = vp.castSurface(ray, 4000, (_id, type) => cfg.skip.has(type));
     if (hit) {
       const t = state.get(hit.id);
       if (t?.type === LANDSCAPE_TYPE) {
@@ -239,6 +329,7 @@ export function createSplinesMode(ctx: ModeContext): EditorMode {
 
   function applyPoint(o: MapObjectData, p: SplinePoint, r: { world: THREE.Vector3; a?: string; ao?: V3 }): void {
     p.p = localOf(o, r.world);
+    if (isFlat(o.type)) p.p[1] = 0;
     if (r.a && r.ao) {
       p.a = r.a;
       p.o = r.ao;
@@ -268,7 +359,7 @@ export function createSplinesMode(ctx: ModeContext): EditorMode {
   function nearestOnCurve(o: MapObjectData, x: number, y: number): { seg: number; world: THREE.Vector3 } | null {
     const pts = pointsOf(o);
     if (pts.length < 2) return null;
-    const closed = o.props.closed === true;
+    const closed = cfg.closed(o);
     // dichte Abtastung je Segment (Kabel: mit Durchhang)
     let best: { seg: number; world: THREE.Vector3 } | null = null;
     let bd = CURVE_PX;
@@ -297,7 +388,7 @@ export function createSplinesMode(ctx: ModeContext): EditorMode {
   // ---------- Aktionen ----------
 
   function startDrawing(preset: Drawing['preset'], id: string | null = null): void {
-    drawing = { preset, id };
+    drawing = { preset, id, heights: [] };
     if (!id) {
       state.select([]);
       selPoint = -1;
@@ -310,15 +401,25 @@ export function createSplinesMode(ctx: ModeContext): EditorMode {
   function stopDrawing(): void {
     if (!drawing) return;
     const o = drawing.id ? state.get(drawing.id) : undefined;
+    const heights = drawing.heights;
+    const isNew = !!drawing.preset;
     drawing = null;
-    if (o && pointsOf(o).length < 2) {
-      ctx.status('Ein Spline braucht mindestens zwei Punkte — Objekt entfernt', true);
+    const min = o ? cfg.minPoints(o.type) : 0;
+    if (o && pointsOf(o).length < min) {
+      ctx.status(`„${ASSETS[o.type]?.label ?? o.type}“ braucht mindestens ${min} Punkte — Objekt entfernt`, true);
       state.update(() => {
         state.map.objects = state.map.objects.filter((x) => x.id !== o.id);
         state.selection = [];
       });
       state.emit('selection');
-    } else if (o) ctx.status(`„${o.name}“: ${pointsOf(o).length} Punkte`);
+    } else if (o) {
+      // flache Fläche (See): Spiegel auf den tiefsten geklickten Uferpunkt legen
+      if (isFlat(o.type) && isNew && heights.length) {
+        const y = Math.round(Math.min(...heights) * 100) / 100;
+        if (Math.abs(y - o.pos[1]) > 1e-3) state.update(() => (o.pos[1] = y), true);
+      }
+      ctx.status(`„${o.name}“: ${pointsOf(o).length} Punkte`);
+    }
     render();
     updateMarks();
   }
@@ -334,9 +435,28 @@ export function createSplinesMode(ctx: ModeContext): EditorMode {
       const r = pointFromHit(null, g);
       const pos: V3 = [Math.round(r.world.x * 100) / 100, Math.round(r.world.y * 100) / 100, Math.round(r.world.z * 100) / 100];
       const props = defaultProps(pr.type, pr.props);
+      if (cfg.minPoints(pr.type) === 0) {
+        // Ein-Klick-Objekt (Meer): setzen, auswählen, fertig
+        const existing = ASSETS[pr.type]?.unique ? state.map.objects.find((x) => x.type === pr.type) : undefined;
+        drawing = null;
+        if (existing) {
+          state.select([existing.id]);
+          ctx.status(`Es gibt nur ein „${ASSETS[pr.type]?.label ?? pr.type}“ pro Map — vorhandenes ausgewählt`, true);
+        } else {
+          const [one] = state.add([{ id: '', name: pr.label, type: pr.type, pos, rot: [0, 0, 0], scale: [1, 1, 1], props }], true);
+          if (one) {
+            state.select([one.id]);
+            ctx.status(`„${one.name}“ gesetzt — ${cfg.placedNote?.(one.type) ?? 'Höhe im Panel einstellen'}`);
+          }
+        }
+        render();
+        updateMarks();
+        return;
+      }
       const [added] = state.add([{ id: '', name: pr.label, type: pr.type, pos, rot: [0, 0, 0], scale: [1, 1, 1], props }], false);
       if (!added) return;
       o = added;
+      drawing.heights.push(r.world.y);
       const p: SplinePoint = { p: [0, 0, 0] };
       applyPoint(o, p, r);
       drawing.id = o.id;
@@ -349,10 +469,12 @@ export function createSplinesMode(ctx: ModeContext): EditorMode {
     }
     const pts = pointsOf(o);
     const p: SplinePoint = { p: [0, 0, 0] };
-    applyPoint(o, p, pointFromHit(o, g));
+    const hitPoint = pointFromHit(o, g);
+    drawing.heights.push(hitPoint.world.y);
+    applyPoint(o, p, hitPoint);
     pts.push(p);
     selPoint = pts.length - 1;
-    setPoints(o, pts, pts.length >= 2);
+    setPoints(o, pts, pts.length >= Math.max(2, cfg.minPoints(o.type)));
     render();
     updateMarks();
   }
@@ -361,8 +483,8 @@ export function createSplinesMode(ctx: ModeContext): EditorMode {
     const o = cur();
     if (!o || selPoint < 0) return;
     const pts = pointsOf(o);
-    if (pts.length <= 2) {
-      ctx.status('Ein Spline braucht mindestens zwei Punkte (ganzes Objekt: im Auswahl-Modus löschen)', true);
+    if (pts.length <= cfg.minPoints(o.type)) {
+      ctx.status(`Mindestens ${cfg.minPoints(o.type)} Punkte nötig (ganzes Objekt: im Auswahl-Modus löschen)`, true);
       return;
     }
     pts.splice(selPoint, 1);
@@ -393,7 +515,7 @@ export function createSplinesMode(ctx: ModeContext): EditorMode {
       const w = worldOf(o, p);
       let y = baseHeight(w.x, w.z);
       if (y === null) {
-        const hit = vp.castSurface(new THREE.Ray(w.clone().setY(w.y + 200), new THREE.Vector3(0, -1, 0)), 1000, (id, type) => SPLINE_TYPES.has(type) || id === o.id);
+        const hit = vp.castSurface(new THREE.Ray(w.clone().setY(w.y + 200), new THREE.Vector3(0, -1, 0)), 1000, (id, type) => cfg.skip.has(type) || id === o.id);
         y = hit?.point.y ?? null;
       }
       if (y === null) continue;
@@ -426,6 +548,8 @@ export function createSplinesMode(ctx: ModeContext): EditorMode {
       if (p.type === 'select' || p.type === 'bool') render();
     };
     switch (p.type) {
+      case 'action':
+        return row('', actionButton(o, p));
       case 'number':
         return row(p.label, numberField({ value: Number(value), step: p.step ?? 0.1, min: p.min, max: p.max, onChange: (v, live) => set(v, live) }));
       case 'bool': {
@@ -471,25 +595,6 @@ export function createSplinesMode(ctx: ModeContext): EditorMode {
     }
   }
 
-  /** Nur passende Eigenschaften je Art zeigen (Spline-Mesh: Mauer-Material nur bei Mauer …) */
-  function relevant(o: MapObjectData, p: PropDef): boolean {
-    if (p.hidden) return false;
-    if (o.type === SPLINEMESH_TYPE) {
-      const k = o.props.profile;
-      if (p.key === 'thickness' || p.key === 'material') return k === 'mauer';
-      if (p.key === 'height') return k === 'mauer' || k === 'zaun';
-      if (p.key === 'spacing') return k === 'leitplanke' || k === 'zaun';
-      if (p.key === 'model') return k === 'modell';
-    }
-    if (o.type === CABLE_TYPE && p.key === 'sag') return o.props.kind !== 'rohr';
-    if (o.type === ROAD_TYPE) {
-      if (p.key === 'curbHeight') return o.props.curbs === true;
-      if (p.key === 'shoulder' || p.key === 'lower') return o.props.deform !== false;
-      if (p.key === 'lineColor') return o.props.markings !== 'none' || o.props.edgeLines !== false;
-    }
-    return true;
-  }
-
   function pointSection(o: MapObjectData): HTMLElement | null {
     const pts = pointsOf(o);
     if (selPoint < 0 || selPoint >= pts.length) return null;
@@ -516,19 +621,19 @@ export function createSplinesMode(ctx: ModeContext): EditorMode {
     const target = p.a ? state.get(p.a) : undefined;
     return section(
       `Punkt ${selPoint + 1} von ${pts.length}`,
-      row('Position', axis(0), axis(1), axis(2)),
-      o.type === ROAD_TYPE && row('Breite (×)', numberField({ value: p.w ?? 1, step: 0.05, min: 0.1, max: 5, onChange: (v, live) => edit((q) => (q.w = v), live) })),
-      o.type !== CABLE_TYPE && row('Querneigung (°)', numberField({ value: p.roll ?? 0, step: 1, min: -45, max: 45, onChange: (v, live) => edit((q) => (q.roll = v || undefined), live) })),
+      isFlat(o.type) ? row('Position', axis(0), axis(2)) : row('Position', axis(0), axis(1), axis(2)),
+      cfg.pointWidth(o.type) && row('Breite (×)', numberField({ value: p.w ?? 1, step: 0.05, min: 0.1, max: 5, onChange: (v, live) => edit((q) => (q.w = v), live) })),
+      cfg.pointRoll(o.type) && row('Querneigung (°)', numberField({ value: p.roll ?? 0, step: 1, min: -45, max: 45, onChange: (v, live) => edit((q) => (q.roll = v || undefined), live) })),
       target ? row('Hängt an', h('span', { class: 'hex' }, target.name), button('Lösen', () => edit((q) => (delete q.a, delete q.o), false))) : null,
-      h('div', { class: 'ls-buttons' }, button('Punkt löschen', deletePoint, 'btn danger', 'trash', pts.length > 2)),
+      h('div', { class: 'ls-buttons' }, button('Punkt löschen', deletePoint, 'btn danger', 'trash', pts.length > cfg.minPoints(o.type))),
     );
   }
 
   function render(): void {
     if (!active) return;
-    const children: (HTMLElement | null)[] = [h('div', { class: 'mode-head', html: `${icon('spline')}<span>Splines</span>` })];
+    const children: (HTMLElement | null)[] = [h('div', { class: 'mode-head', html: `${icon(cfg.icon)}<span>${cfg.label}</span>` })];
     const grid = h('div', { class: 'ls-tools' });
-    for (const pr of SPLINE_PRESETS) {
+    for (const pr of cfg.presets) {
       const on = drawing && !drawing.id && drawing.preset?.id === pr.id;
       const on2 = drawing?.preset?.id === pr.id;
       const b = h('button', { class: `btn ls-tool${on || on2 ? ' on' : ''}`, html: `${icon(pr.icon)}${pr.label}` });
@@ -540,7 +645,7 @@ export function createSplinesMode(ctx: ModeContext): EditorMode {
       children.push(
         section(
           'Zeichnen',
-          h('div', { class: 'mode-note' }, 'Klicks setzen Punkte (Straßen folgen dem Gelände, Kabel rasten an Strommasten ein). Enter oder Esc beendet.'),
+          h('div', { class: 'mode-note' }, cfg.drawNote),
           h('div', { class: 'ls-buttons' }, button('Fertig', stopDrawing, 'btn primary')),
         ),
       );
@@ -548,43 +653,36 @@ export function createSplinesMode(ctx: ModeContext): EditorMode {
     const o = cur();
     if (o) {
       const pts = pointsOf(o);
-      const len = pts.length > 1 ? new SplineCurve(pts, o.props.closed === true).length() : 0;
+      const len = pts.length > 1 ? new SplineCurve(pts, cfg.closed(o)).length() : 0;
+      const pointTools = cfg.minPoints(o.type) > 0;
       children.push(
         section(
           o.name,
-          h('div', { class: 'mode-note dim' }, `${ASSETS[o.type]?.label ?? o.type} · ${pts.length} Punkte · ${len.toFixed(1)} m`),
-          h(
-            'div',
-            { class: 'ls-buttons' },
-            button('Punkte anhängen', () => startDrawing(null, o.id), 'btn', 'plus', !drawing),
-            button('Umkehren', reverse),
-            button('Aufs Gelände', dropToGround),
-          ),
+          h('div', { class: 'mode-note dim' }, pointTools ? `${ASSETS[o.type]?.label ?? o.type} · ${pts.length} Punkte · ${len.toFixed(1)} m` : (ASSETS[o.type]?.label ?? o.type)),
+          ...(cfg.objectRows?.(o, (fn, commit) => state.update(fn, commit)) ?? []),
+          pointTools &&
+            h(
+              'div',
+              { class: 'ls-buttons' },
+              button('Punkte anhängen', () => startDrawing(null, o.id), 'btn', 'plus', !drawing),
+              ...(isFlat(o.type) ? [] : [button('Umkehren', reverse), button('Aufs Gelände', dropToGround)]),
+            ),
         ),
       );
       children.push(pointSection(o));
       const groups = new Map<string, PropDef[]>();
       for (const p of ASSETS[o.type]?.props ?? []) {
-        if (!relevant(o, p)) continue;
+        if (!cfg.relevant(o, p)) continue;
         const g = p.group ?? 'Eigenschaften';
         if (!groups.has(g)) groups.set(g, []);
         groups.get(g)!.push(p);
       }
       for (const [g, ps] of groups) children.push(section(g, ...ps.map((p) => propRow(o, p))));
-    } else if (!drawing) children.push(h('div', { class: 'mode-note' }, 'Spline im Viewport anklicken oder oben einen neuen anlegen.'));
+    } else if (!drawing) children.push(h('div', { class: 'mode-note' }, cfg.emptyNote));
     children.push(
       section(
         'Bedienung',
-        h(
-          'ul',
-          { class: 'mode-list' },
-          h('li', {}, 'Punkt ziehen: verschieben (folgt dem Gelände)'),
-          h('li', {}, 'Umschalt + Ziehen: Höhe ändern'),
-          h('li', {}, 'Klick auf die Kurve: Punkt einfügen'),
-          h('li', {}, 'Strg + Klick: Punkt am Ende anhängen'),
-          h('li', {}, 'Entf: Punkt löschen · Esc: Punkt abwählen'),
-          h('li', {}, 'Kabel auf einem Strommast: rastet am Isolator ein und folgt dem Mast'),
-        ),
+        h('ul', { class: 'mode-list' }, ...cfg.help.map((t) => h('li', {}, t))),
       ),
     );
     panel.replaceChildren(...children.filter((c): c is HTMLElement => !!c));
@@ -620,7 +718,7 @@ export function createSplinesMode(ctx: ModeContext): EditorMode {
     const pts = pointsOf(o);
     const p = pts[drag.index];
     if (!p) return;
-    if (drag.vertical) {
+    if (drag.vertical && !isFlat(o.type)) {
       const w = worldOf(o, p);
       const dist = w.distanceTo(vp.camera.position);
       const r = vp.renderer.domElement.getBoundingClientRect();
@@ -644,9 +742,9 @@ export function createSplinesMode(ctx: ModeContext): EditorMode {
   }
 
   return {
-    id: 'splines',
-    label: 'Splines',
-    icon: 'spline',
+    id: cfg.id,
+    label: cfg.label,
+    icon: cfg.icon,
     panel,
     allowsSelection: false,
     activate() {
@@ -711,7 +809,7 @@ export function createSplinesMode(ctx: ModeContext): EditorMode {
       }
       // anderen Spline auswählen (oder abwählen)
       const node = vp.pick(x, y);
-      if (node && SPLINE_TYPES.has(node.data.type)) {
+      if (node && cfg.types.has(node.data.type)) {
         if (node.data.id !== o?.id) {
           state.select([node.data.id]);
           selPoint = -1;

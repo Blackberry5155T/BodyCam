@@ -812,6 +812,16 @@ export class Weather {
     return this.rainNow;
   }
 
+  /** Himmelsfarben inkl. Bewölkung (für die Wasser-Spiegelung ohne Planar-Reflexion) */
+  get skyColors(): { zenith: THREE.Color; horizon: THREE.Color } {
+    return { zenith: this.u.wSkyZenith.value, horizon: this.u.wSkyHorizon.value };
+  }
+
+  /** Objekte, die in Spiegelungen fehlen sollen (Wetter-Partikel, Spielerkörper, …) */
+  get passHidden(): THREE.Object3D[] {
+    return [...this.noWeather, this.group];
+  }
+
   /** Taschenlampe: beleuchtet Regen und Schnee im Lichtkegel */
   setLamp(lamp: THREE.SpotLight | null): void {
     this.lamp = lamp;

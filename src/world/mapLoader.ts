@@ -173,6 +173,10 @@ export class WorldRig {
   private baseSun = 1;
   private baseHemi = 1;
   private overcast = 0;
+  /** aktuelle Bewölkung 0..1 (God-Rays) */
+  get cloudiness(): number {
+    return this.overcast;
+  }
   private flash = 0;
 
   constructor(world: WorldSettings) {

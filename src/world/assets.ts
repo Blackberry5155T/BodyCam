@@ -11,6 +11,8 @@ import { LANDSCAPE_ASSET, LANDSCAPE_TYPE } from './landscape/asset.ts';
 import { FOLIAGE_ASSET, FOLIAGE_TYPE } from './foliage/asset.ts';
 import { SPLINE_ASSETS } from './splines/asset.ts';
 import { BRUSH_ASSETS, BRUSH_PRESETS, BRUSH_TYPE } from './brushes/asset.ts';
+import { WATER_ASSETS, WATER_PRESETS } from './water/asset.ts';
+import { SOURCE_ASSETS } from './water/source.ts';
 import { POWERPOLE_ASSET, POWERPOLE_TYPE } from './props/powerpole.ts';
 import { WEATHER_OPTIONS } from './weather.ts';
 import { ASPECTS, SCREEN_PX, STAGE_W, defaultScreen, drawStage, stageHeight, stageView } from './screen.ts';
@@ -20,7 +22,8 @@ import type { BlobSource } from './blobStore.ts';
 // Jeder Typ beschreibt seine Eigenschaften (für das Details-Panel im Editor) und baut sein 3D-Objekt.
 // Neue Typen: Eintrag in ASSETS + ggf. Preset in PRESETS ergänzen.
 
-export type PropType = 'number' | 'color' | 'bool' | 'select' | 'text' | 'model';
+/** 'action': Knopf im Details-Panel (wird nicht gespeichert), ruft AssetInstance.action(key) auf */
+export type PropType = 'number' | 'color' | 'bool' | 'select' | 'text' | 'model' | 'action';
 
 export interface PropDef {
   key: string;
@@ -74,6 +77,11 @@ export interface AssetInstance {
    * z. B. Landscape-Farben oder neue Blob-Verweise nach dem Speichern
    */
   updateProps?(o: MapObjectData): boolean;
+  /**
+   * Knopf-Eigenschaft (PropType 'action') ausführen, z. B. „Simulation berechnen“. `progress` meldet 0..1 + Text;
+   * das Ergebnis sind geänderte Eigenschaften (Editor übernimmt sie als Undo-Schritt).
+   */
+  action?(key: string, progress: (f: number, text?: string) => void): Promise<Record<string, PropValue> | void>;
   /** Eigene Collider (Weltkoordinaten), zusätzlich zu userData.collider */
   colliders?(root: THREE.Object3D): Collider[];
   dispose?(): void;
@@ -364,6 +372,13 @@ const surfaceProps = (material: string): PropDef[] => [
   { key: 'collision', label: 'Kollision', type: 'bool', default: true, group: 'Physik' },
 ];
 
+/** Simulierte Props (Phase 6): fallen, rollen, schwimmen im Wasser (nur im Spiel; im Editor statisch) */
+export const PHYSICS_PROPS: PropDef[] = [
+  { key: 'simulate', label: 'Simuliert', type: 'bool', default: false, group: 'Physik' },
+  { key: 'mass', label: 'Masse (kg)', type: 'number', default: 40, min: 0.5, max: 5000, step: 0.5, group: 'Physik' },
+  { key: 'buoyancy', label: 'Auftrieb', type: 'number', default: 1, min: 0, max: 4, step: 0.05, group: 'Physik' },
+];
+
 const lightProps = (color: string, intensity: number, distance: number, shadow: boolean): PropDef[] => [
   { key: 'color', label: 'Lichtfarbe', type: 'color', default: color, group: 'Licht' },
   { key: 'intensity', label: 'Intensität', type: 'number', default: intensity, min: 0, max: 500, step: 0.5, group: 'Licht' },
@@ -420,17 +435,19 @@ export const ASSETS: Record<string, AssetDef> = {
   [FOLIAGE_TYPE]: FOLIAGE_ASSET,
   ...SPLINE_ASSETS,
   ...BRUSH_ASSETS,
+  ...WATER_ASSETS,
+  ...SOURCE_ASSETS,
   [POWERPOLE_TYPE]: POWERPOLE_ASSET,
   box: {
     label: 'Box',
     category: 'Geometrie',
-    props: surfaceProps('farbe'),
+    props: [...surfaceProps('farbe'), ...PHYSICS_PROPS],
     create: (o, ctx) => primitive(new THREE.BoxGeometry(1, 1, 1), o, ctx, 'box', 'box'),
   },
   cylinder: {
     label: 'Zylinder',
     category: 'Geometrie',
-    props: [...surfaceProps('farbe'), { key: 'segments', label: 'Segmente', type: 'number', default: 32, min: 3, max: 96, step: 1, group: 'Form' }],
+    props: [...surfaceProps('farbe'), ...PHYSICS_PROPS, { key: 'segments', label: 'Segmente', type: 'number', default: 32, min: 3, max: 96, step: 1, group: 'Form' }],
     create: (o, ctx) =>
       primitive(new THREE.CylinderGeometry(0.5, 0.5, 1, Math.round(p(o, 'segments', 32))), o, ctx, 'cylinder', 'cylinder'),
   },
@@ -1093,6 +1110,7 @@ export const ASSETS: Record<string, AssetDef> = {
         ],
         group: 'Physik',
       },
+      ...PHYSICS_PROPS,
       { key: 'castShadow', label: 'Wirft Schatten', type: 'bool', default: true, group: 'Rendering' },
     ],
     create: (o, ctx) => {
@@ -1238,7 +1256,7 @@ function lightControl(state: LightState, setColor: (c: string) => void): LightCo
   };
 }
 
-export const CATEGORIES = ['Geometrie', 'Brushes', 'Props', 'Licht', 'Volumetrik', 'Effekte', 'Gameplay', 'Modelle'];
+export const CATEGORIES = ['Geometrie', 'Brushes', 'Props', 'Licht', 'Volumetrik', 'Effekte', 'Gameplay', 'Wasser', 'Modelle'];
 
 /** Vorlage im Content Browser: Asset-Typ + Startwerte */
 export interface AssetPreset {
@@ -1259,6 +1277,7 @@ export const PRESETS: AssetPreset[] = [
   { id: 'stairs', label: 'Treppe', category: 'Geometrie', type: 'stairs', icon: 'stairs', scale: [1.5, 1.2, 2.4] },
   { id: 'doorwall', label: 'Wand mit Tür', category: 'Geometrie', type: 'doorwall', icon: 'door', scale: [4, 3, 0.3] },
   ...BRUSH_PRESETS.map((b) => ({ id: b.id, label: b.label, category: 'Brushes', type: BRUSH_TYPE, icon: b.icon, scale: b.scale, rot: b.rot, props: b.props })),
+  ...WATER_PRESETS.filter((w) => w.id === 'ocean' || w.id === 'source').map((w) => ({ id: w.id, label: w.label, category: 'Wasser', type: w.type, icon: w.icon, props: w.props })),
 
   { id: 'wall', label: 'Wand (Beton)', category: 'Props', type: 'box', icon: 'wall', scale: [4, 3, 0.3], props: { material: 'wand_beton', color: '#ffffff' } },
   { id: 'floor', label: 'Boden (Fliesen)', category: 'Props', type: 'box', icon: 'floor', scale: [10, 0.1, 10], props: { material: 'bodenfliesen', color: '#ffffff', castShadow: false } },
@@ -1266,6 +1285,8 @@ export const PRESETS: AssetPreset[] = [
   { id: 'doorframe', label: 'Türrahmen (gelb)', category: 'Props', type: 'doorwall', icon: 'door', scale: [6, 3, 0.3], props: { material: 'beton_gelb', color: '#ffffff' } },
   { id: 'cover', label: 'Deckung (Holz)', category: 'Props', type: 'box', icon: 'crate', scale: [1.4, SCALE.coverHeight, 0.6], props: { material: 'holz', color: '#ffffff' } },
   { id: 'crate', label: 'Holzkiste 1 m', category: 'Props', type: 'box', icon: 'crate', props: { material: 'holz', color: '#ffffff' } },
+  { id: 'barrel', label: 'Fass (Holz, simuliert)', category: 'Props', type: 'cylinder', icon: 'barrel', scale: [0.6, 0.9, 0.6], props: { material: 'holz', color: '#ffffff', segments: 20, simulate: true, mass: 35, buoyancy: 1 } },
+  { id: 'physcrate', label: 'Kiste (simuliert)', category: 'Props', type: 'box', icon: 'crate', scale: [0.8, 0.8, 0.8], props: { material: 'holz', color: '#ffffff', simulate: true, mass: 60, buoyancy: 1 } },
   { id: 'pillar', label: 'Pfeiler (Beton)', category: 'Props', type: 'cylinder', icon: 'cylinder', scale: [1, 3, 1], props: { material: 'beton_dunkel', color: '#ffffff' } },
   { id: 'pole', label: 'Laternenmast', category: 'Props', type: 'cylinder', icon: 'pole', scale: [0.14, 3.4, 0.14], props: { material: 'metall', color: '#3a3d40', roughness: 0.45, metalness: 0.8 } },
   { id: 'powerpole', label: 'Strommast', category: 'Props', type: 'powerpole', icon: 'pole' },
@@ -1308,6 +1329,6 @@ export const PRESETS: AssetPreset[] = [
 export function defaultProps(type: string, extra: Record<string, PropValue> = {}): Record<string, PropValue> {
   const def = ASSETS[type];
   const props: Record<string, PropValue> = {};
-  for (const d of def?.props ?? []) props[d.key] = d.default;
+  for (const d of def?.props ?? []) if (d.type !== 'action') props[d.key] = d.default;
   return { ...props, ...extra };
 }
