@@ -158,6 +158,7 @@ export function edgeRing(m: EditMesh, k: number, ef = m.edgeFaces()): Ring | nul
   const r1 = walk(start[0]);
   if (r1.closed) return { edges: [[a0, b0], ...r1.edges], quads: r1.quads, closed: true };
   const r2 = start.length === 2 ? walk(start[1]) : { edges: [], quads: [], closed: false };
+  if (!r1.quads.length && !r2.quads.length) return null;
   return { edges: [...r2.edges.reverse(), [a0, b0], ...r1.edges], quads: [...r2.quads.reverse(), ...r1.quads], closed: false };
 }
 
@@ -425,9 +426,21 @@ export function bevel(m: EditMesh, edges: Iterable<number>, w: number): Selectio
     for (const fi of fan) ref.add(polyNormal(oldFaces[fi].v.map((i) => m.verts[i]), n1));
     addOriented(pts, ref, oldFaces[fan[0]].m);
   }
-  m.validate();
-  m.dropUnused(bv);
-  return selFromFaces(m, added.filter((i) => i < m.faces.length));
+  const addedSet = new Set(added);
+  const kept: { v: number[]; m: number }[] = [];
+  const sel: number[] = [];
+  m.faces.forEach((f, fi) => {
+    const v: number[] = [];
+    for (const i of f.v) if (v[v.length - 1] !== i) v.push(i);
+    while (v.length > 1 && v[0] === v[v.length - 1]) v.pop();
+    if (v.length < 3 || new Set(v).size !== v.length) return;
+    if (addedSet.has(fi)) sel.push(kept.length);
+    kept.push({ v, m: f.m });
+  });
+  m.faces = kept;
+  m.tidyEdges();
+  m.dropUnused(bv); // entfernt nur unbenutzte Punkte, Flächenreihenfolge bleibt
+  return selFromFaces(m, sel);
 }
 
 /** Flächen rund um einen Punkt in Reihenfolge (null bei offenem Rand) */
@@ -712,11 +725,7 @@ export function dissolveVerts(m: EditMesh, vs: Set<number>): void {
       if (a === v) nb.add(b);
       if (b === v) nb.add(a);
     }
-    if (nb.size > 2 && around.length > 1) {
-      const pairs: [number, number][] = [];
-      for (let i = 1; i < around.length; i++) pairs.push([around[0], around[i]]);
-      mergeFaceGroups(m, [around]);
-    }
+    if (nb.size > 2 && around.length > 1) mergeFaceGroups(m, [around]);
     for (const f of m.faces) {
       const i = f.v.indexOf(v);
       if (i >= 0 && f.v.length > 3) f.v.splice(i, 1);
@@ -922,7 +931,9 @@ export function duplicate(m: EditMesh, s: Selection): Selection {
 
 /** Ausgewählte Flächen als eigenes Netz herauslösen */
 export function separate(m: EditMesh, s: Selection): EditMesh | null {
-  if (!s.f.size && !s.e.size) return null;
+  const fs = [...s.f].filter((fi) => m.faces[fi]);
+  const looseSel = m.edges.filter(([a, b]) => s.e.has(ek(a, b)));
+  if (!fs.length && !looseSel.length) return null;
   const out = new EditMesh();
   const map = new Map<number, number>();
   const nv = (v: number) => {
@@ -930,13 +941,16 @@ export function separate(m: EditMesh, s: Selection): EditMesh | null {
     if (i === undefined) map.set(v, (i = out.addVert(m.verts[v])));
     return i;
   };
-  for (const fi of s.f) out.addFace(m.faces[fi].v.map(nv), m.faces[fi].m);
-  const looseSel = m.edges.filter(([a, b]) => s.e.has(ek(a, b)));
+  for (const fi of fs) out.addFace(m.faces[fi].v.map(nv), m.faces[fi].m);
   for (const [a, b] of looseSel) out.edges.push([nv(a), nv(b)]);
-  deleteFaces(m, s.f);
+  out.tidyEdges();
+  // Erst alles entfernen, dann einmal aufräumen (dropUnused nummeriert die Punkte um)
+  const touched = new Set<number>(map.keys());
   const loose = new Set(looseSel.map(([a, b]) => ek(a, b)));
+  const fset = new Set(fs);
   m.edges = m.edges.filter(([a, b]) => !loose.has(ek(a, b)));
-  m.dropUnused(looseSel.flat());
+  m.faces = m.faces.filter((_, i) => !fset.has(i));
+  m.dropUnused(touched);
   return out;
 }
 
@@ -964,6 +978,45 @@ export function mirrorMerge(m: EditMesh, axis: 0 | 1 | 2, eps = 1e-4): void {
   const drop = new Set<number>();
   for (const l of count.values()) if (l.length > 1) for (const i of l) drop.add(i);
   if (drop.size) m.faces = m.faces.filter((_, i) => !drop.has(i));
+}
+
+/** Nur die gespiegelten Kopien (ohne Original) für die Live-Spiegel-Anzeige; null = keine Achse aktiv */
+export function mirrorCopies(m: EditMesh, axes: readonly boolean[]): EditMesh | null {
+  let parts: EditMesh[] = [m];
+  for (let a = 0; a < 3; a++) {
+    if (!axes[a]) continue;
+    const s = new THREE.Vector3(1, 1, 1).setComponent(a, -1);
+    const M = new THREE.Matrix4().makeScale(s.x, s.y, s.z);
+    parts = parts.concat(
+      parts.map((p) => {
+        const c = p.clone();
+        c.applyMatrix(M);
+        return c;
+      }),
+    );
+  }
+  if (parts.length < 2) return null;
+  const out = new EditMesh();
+  for (const p of parts.slice(1)) out.append(p);
+  return out;
+}
+
+/** Netz mit angewendetem Live-Spiegel (Export, Kollision, Anwenden); ohne Spiegel das Original */
+export function mirroredMesh(m: EditMesh, axes: readonly boolean[]): EditMesh {
+  if (!axes.some(Boolean) || !m.faces.length) return m;
+  const out = m.clone();
+  for (let a = 0; a < 3; a++) if (axes[a]) mirrorMerge(out, a as 0 | 1 | 2);
+  return out;
+}
+
+/** Clipping: Punkte bleiben auf ihrer Seite der Spiegelebene; Punkte, die auf ihr lagen, bleiben auf ihr */
+export function clipToMirror(p: THREE.Vector3, base: THREE.Vector3, axes: readonly boolean[], eps = 1e-4): void {
+  for (let a = 0; a < 3; a++) {
+    if (!axes[a]) continue;
+    const b = base.getComponent(a);
+    const v = p.getComponent(a);
+    if (Math.abs(b) <= eps || b * v < 0) p.setComponent(a, 0);
+  }
 }
 
 /** Auswahl an einer Achse durch `center` spiegeln (Punkte gespiegelt, gewählte Flächen umgedreht) */

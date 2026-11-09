@@ -5,6 +5,7 @@ import { MeshBVH, acceleratedRaycast } from 'three-mesh-bvh';
 import { h } from '../ui.ts';
 import { buildGeometry } from './build.ts';
 import { objectMatrix, type MObject } from './doc.ts';
+import { mirrorCopies } from './ops.ts';
 import { ek, ekA, ekB } from './mesh.ts';
 import type { SelMode, Selection } from './ops.ts';
 
@@ -17,6 +18,8 @@ interface ObjView {
   mesh: THREE.Mesh;
   triFace: Int32Array;
   bvhDirty: boolean;
+  /** Live-Spiegel: gespiegelte Hälfte(n), nur Anzeige (nicht anklickbar) */
+  mirror: THREE.Mesh | null;
 }
 
 export interface ViewHandlers {
@@ -445,7 +448,7 @@ export class ModelView {
       mesh.raycast = acceleratedRaycast;
       mesh.userData.objectId = o.id;
       this.objRoot.add(mesh);
-      v = { mesh, triFace: built.triFace, bvhDirty: true };
+      v = { mesh, triFace: built.triFace, bvhDirty: true, mirror: null };
       this.views.set(o.id, v);
     } else {
       v.mesh.geometry.dispose();
@@ -453,6 +456,23 @@ export class ModelView {
       v.mesh.material = materials;
       v.triFace = built.triFace;
       v.bvhDirty = true;
+    }
+    const copies = o.mesh.faces.length ? mirrorCopies(o.mesh, o.mirror) : null;
+    if (copies) {
+      const mb = buildGeometry(copies, { smooth: o.smooth, smoothAngle: o.smoothAngle, uvScale: (i) => (materials[i]?.userData.uvScale as number) ?? 1, uvMatrix: objectMatrix(o) });
+      if (!v.mirror) {
+        v.mirror = new THREE.Mesh(mb.geometry, materials);
+        v.mirror.raycast = () => {};
+        v.mesh.add(v.mirror);
+      } else {
+        v.mirror.geometry.dispose();
+        v.mirror.geometry = mb.geometry;
+        v.mirror.material = materials;
+      }
+    } else if (v.mirror) {
+      v.mirror.geometry.dispose();
+      v.mesh.remove(v.mirror);
+      v.mirror = null;
     }
     this.syncTransform(o);
   }
@@ -476,6 +496,7 @@ export class ModelView {
     for (const [id, v] of this.views) {
       if (ids.has(id)) continue;
       v.mesh.geometry.dispose();
+      v.mirror?.geometry.dispose();
       this.objRoot.remove(v.mesh);
       this.views.delete(id);
     }
@@ -486,7 +507,10 @@ export class ModelView {
   }
 
   setMaterials(materials: THREE.Material[]): void {
-    for (const v of this.views.values()) v.mesh.material = materials;
+    for (const v of this.views.values()) {
+      v.mesh.material = materials;
+      if (v.mirror) v.mirror.material = materials;
+    }
   }
 
   /** Umrisse der gewählten Objekte (Objektmodus) */

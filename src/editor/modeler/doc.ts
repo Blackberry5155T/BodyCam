@@ -36,6 +36,10 @@ export interface MObject {
   smooth: boolean;
   smoothAngle: number;
   visible: boolean;
+  /** Live-Spiegel (wie Blenders Mirror-Modifier) je lokaler Achse X/Y/Z, durch den Objekt-Ursprung */
+  mirror: [boolean, boolean, boolean];
+  /** Punkte können die Spiegelebene nicht überqueren, Punkte auf der Ebene bleiben dort */
+  mirrorClip: boolean;
 }
 
 export interface ModelDoc {
@@ -57,6 +61,8 @@ interface ObjectJSON {
   smooth: boolean;
   smoothAngle: number;
   visible?: boolean;
+  mirror?: boolean[];
+  mirrorClip?: boolean;
 }
 
 export interface DocJSON {
@@ -85,6 +91,8 @@ export function newObject(name: string, mesh: EditMesh): MObject {
     smooth: false,
     smoothAngle: 30,
     visible: true,
+    mirror: [false, false, false],
+    mirrorClip: true,
   };
 }
 
@@ -117,6 +125,8 @@ export function docToJSON(d: ModelDoc): DocJSON {
       smooth: o.smooth,
       smoothAngle: o.smoothAngle,
       visible: o.visible,
+      ...(o.mirror.some(Boolean) ? { mirror: [...o.mirror] } : {}),
+      mirrorClip: o.mirrorClip,
     })),
   };
 }
@@ -136,6 +146,8 @@ export function docFromJSON(j: DocJSON): ModelDoc {
       smooth: !!o.smooth,
       smoothAngle: o.smoothAngle ?? 30,
       visible: o.visible !== false,
+      mirror: [!!o.mirror?.[0], !!o.mirror?.[1], !!o.mirror?.[2]],
+      mirrorClip: o.mirrorClip !== false,
     })),
   };
 }

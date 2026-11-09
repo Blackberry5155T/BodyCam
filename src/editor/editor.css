@@ -1918,3 +1918,8 @@ select {
   color: var(--text-dim, #9a9a9a);
   line-height: 1.35;
 }
+.btn.md-small.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}

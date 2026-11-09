@@ -443,7 +443,11 @@ export class Modeler {
       this.sel = ops.emptySel();
     }
     this.mode = mode;
-    if (mode === 'object' && this.tool === 'loopcut') this.tool = 'select';
+    if (mode === 'object' && this.tool === 'loopcut') {
+      this.tool = 'select';
+      this.loopHover = -1;
+      this.view.setLines('loopcut', [], '#ffd34d');
+    }
     this.lastOp = null;
     this.history.push(this.snap(mode === 'edit' ? 'Bearbeitungsmodus' : 'Objektmodus'));
     this.refresh();
@@ -587,7 +591,15 @@ export class Modeler {
           const ring = ops.edgeRing(o.mesh, k);
           s = ops.selFromFaces(o.mesh, ring?.quads ?? []);
         } else s = ops.selFromEdges(o.mesh, ops.edgeLoop(o.mesh, k));
-        if (d.shift) s = ops.selFromVerts(o.mesh, [...this.sel.v, ...s.v]);
+        // Shift: zur Auswahl hinzufügen, im jeweiligen Modus (über Punkte vereinigt kämen in Flächen-/Kantenmodus Nachbarn dazu)
+        if (d.shift) {
+          s =
+            this.selMode === 'f'
+              ? ops.selFromFaces(o.mesh, [...this.sel.f, ...s.f])
+              : this.selMode === 'e'
+                ? ops.selFromEdges(o.mesh, [...this.sel.e, ...s.e])
+                : ops.selFromVerts(o.mesh, [...this.sel.v, ...s.v]);
+        }
         this.setSel(s, 'Schleife auswählen');
         void e;
         return;
@@ -697,7 +709,11 @@ export class Modeler {
     if (verts && o) {
       const O = objectMatrix(o);
       const M = O.clone().invert().multiply(T).multiply(O);
-      for (const [i, p] of verts) o.mesh.verts[i].copy(p).applyMatrix4(M);
+      const clip = o.mirrorClip && o.mirror.some(Boolean);
+      for (const [i, p] of verts) {
+        o.mesh.verts[i].copy(p).applyMatrix4(M);
+        if (clip) ops.clipToMirror(o.mesh.verts[i], p, o.mirror);
+      }
       this.view.syncObject(o, this.displayMats);
       this.view.setEdit(o, this.sel, this.selMode);
     }
@@ -1095,10 +1111,11 @@ export class Modeler {
   private loopCutAt(x: number, y: number): void {
     const o = this.activeObj;
     if (!o) return;
-    const k = this.loopHover >= 0 ? this.loopHover : this.view.nearestEdgeKey(o, x, y);
+    const hit = this.view.nearestEdgeKey(o, x, y);
+    const k = hit >= 0 ? hit : this.loopHover;
+    this.loopHover = -1;
     if (k < 0 || !ops.edgeRing(o.mesh, k)) return this.host.status('Loop Cut: über eine Kante zwischen Vierecken fahren', true);
     this.view.setLines('loopcut', [], '#ffd34d');
-    this.selMode = 'e';
     this.runOp(
       'Loop Cut',
       [
@@ -1109,11 +1126,11 @@ export class Modeler {
       (v) => {
         const m = this.activeObj!.mesh; // nach Redo-Panel-Änderungen ist das Objekt neu aufgebaut
         const ring = ops.edgeRing(m, k);
-        if (!ring) return;
+        if (!ring) throw new Error('kein Kantenring');
         this.sel = ops.loopCut(m, ring, v.n as number, v.f as number);
+        this.selMode = 'e';
       },
     );
-    this.loopHover = -1;
   }
 
   private simpleOp(title: string, fn: (o: MObject) => void, needSel = true): void {
@@ -1237,6 +1254,8 @@ export class Modeler {
         c.scale.copy(src.scale);
         c.smooth = src.smooth;
         c.smoothAngle = src.smoothAngle;
+        c.mirror = [...src.mirror];
+        c.mirrorClip = src.mirrorClip;
         copies.push(c);
       }
       this.doc.objects.push(...copies);
@@ -1256,13 +1275,15 @@ export class Modeler {
     this.runOp('Trennen', [], {}, () => {
       const src = this.activeObj!;
       const part = ops.separate(src.mesh, this.sel);
-      if (!part) return;
+      if (!part) throw new Error('keine Flächen oder losen Kanten ausgewählt');
       const n = newObject(`${src.name}.Teil`, part);
       n.pos.copy(src.pos);
       n.rot.copy(src.rot);
       n.scale.copy(src.scale);
       n.smooth = src.smooth;
       n.smoothAngle = src.smoothAngle;
+      n.mirror = [...src.mirror];
+      n.mirrorClip = src.mirrorClip;
       this.doc.objects.push(n);
       this.selected.add(n.id);
       this.sel = ops.emptySel();
@@ -2016,7 +2037,7 @@ export class Modeler {
     const scroll = this.side.scrollTop;
     this.side.replaceChildren(
       h('div', { class: 'panel-tabs' }, h('div', { class: 'panel-tab active' }, iconEl('modeler'), 'Modell')),
-      h('div', { class: 'panel-body md-side-body' }, this.objectsSection(), this.propsSection(), this.materialsSection(), this.modelSection()),
+      h('div', { class: 'panel-body md-side-body' }, this.objectsSection(), this.propsSection(), this.mirrorSection(), this.materialsSection(), this.modelSection()),
     );
     const body = this.side.querySelector('.md-side-body');
     if (body) body.scrollTop = scroll;
@@ -2071,7 +2092,10 @@ export class Modeler {
           this.vecRow(this.sel.v.size === 1 ? 'Punkt' : 'Mitte', c, 0.05, 1, (a, val, live) => {
             if (!snapB) snapB = new Map([...this.sel.v].map((i) => [i, o.mesh.verts[i].clone()]));
             const d = val - base[a];
-            for (const [i, p] of snapB) o.mesh.verts[i][a] = p[a] + d;
+            for (const [i, p] of snapB) {
+              o.mesh.verts[i][a] = p[a] + d;
+              if (o.mirrorClip) ops.clipToMirror(o.mesh.verts[i], p, o.mirror);
+            }
             this.view.syncObject(o, this.displayMats);
             this.view.setEdit(o, this.sel, this.selMode);
             if (!live) {
@@ -2147,6 +2171,50 @@ export class Modeler {
           )
         : null,
     );
+  }
+
+  /** Live-Spiegel des aktiven Objekts: in Objekt- und Edit-Modus umschaltbar, während man modelliert */
+  private mirrorSection(): HTMLElement | null {
+    const o = this.activeObj;
+    if (!o) return null;
+    const axisBtn = (a: 0 | 1 | 2) => {
+      const b = this.smallBtn('', AXIS_NAMES[a], `Live an der lokalen ${AXIS_NAMES[a]}-Achse spiegeln (durch den Objekt-Ursprung)`, () => this.toggleLiveMirror(a));
+      b.classList.toggle('active', o.mirror[a]);
+      return b;
+    };
+    const clip = h('input', { type: 'checkbox' });
+    clip.checked = o.mirrorClip;
+    clip.addEventListener('change', () => {
+      o.mirrorClip = clip.checked;
+      this.commit('Spiegel-Clipping');
+    });
+    const on = o.mirror.some(Boolean);
+    return this.section(
+      'Spiegeln (live)',
+      this.row('Achsen', h('div', { class: 'md-btns' }, axisBtn(0), axisBtn(1), axisBtn(2))),
+      on ? this.row('Clipping', clip) : null,
+      on ? h('div', { class: 'md-btns' }, this.smallBtn('mirror', 'Anwenden', 'Spiegelung fest ins Netz übernehmen (Naht wird verschweißt)', () => this.applyLiveMirror())) : null,
+      h('div', { class: 'md-hint' }, on ? 'Du bearbeitest eine Seite, die andere folgt live. Clipping hält Punkte an der Spiegelebene fest. Export und Kollision nutzen das gespiegelte Modell.' : 'Spiegelt das Objekt live, während du modellierst (Ebene durch den Objekt-Ursprung).'),
+    );
+  }
+
+  private toggleLiveMirror(axis: 0 | 1 | 2): void {
+    const o = this.activeObj;
+    if (!o) return;
+    o.mirror[axis] = !o.mirror[axis];
+    this.view.syncObject(o, this.displayMats);
+    this.commit(`Live-Spiegel ${AXIS_NAMES[axis]} ${o.mirror[axis] ? 'an' : 'aus'}`);
+  }
+
+  private applyLiveMirror(): void {
+    const o = this.activeObj;
+    if (!o || !o.mirror.some(Boolean)) return;
+    o.mesh = ops.mirroredMesh(o.mesh, o.mirror);
+    o.mirror = [false, false, false];
+    if (this.mode === 'edit') this.sel = ops.emptySel();
+    this.view.syncObject(o, this.displayMats);
+    if (this.mode === 'edit') this.view.setEdit(o, this.sel, this.selMode);
+    this.commit('Live-Spiegel anwenden');
   }
 
   private materialsSection(): HTMLElement {
@@ -2322,7 +2390,7 @@ export class Modeler {
     for (const o of this.doc.objects) {
       if (!o.visible) continue;
       const M = objectMatrix(o);
-      for (const v of o.mesh.verts) pts.push(v.clone().applyMatrix4(M));
+      for (const v of ops.mirroredMesh(o.mesh, o.mirror).verts) pts.push(v.clone().applyMatrix4(M));
     }
     const pos: number[] = [];
     if (pts.length && this.doc.collision === 'box') {
@@ -2342,7 +2410,8 @@ export class Modeler {
       for (const o of this.doc.objects) {
         if (!o.visible) continue;
         const M = objectMatrix(o);
-        for (const k of o.mesh.allEdges()) pos.push(...o.mesh.verts[ekA(k)].clone().applyMatrix4(M).toArray(), ...o.mesh.verts[ekB(k)].clone().applyMatrix4(M).toArray());
+        const mm = ops.mirroredMesh(o.mesh, o.mirror);
+        for (const k of mm.allEdges()) pos.push(...mm.verts[ekA(k)].clone().applyMatrix4(M).toArray(), ...mm.verts[ekB(k)].clone().applyMatrix4(M).toArray());
       }
     }
     this.view.setLines('collision', pos, '#3ddc84', false);

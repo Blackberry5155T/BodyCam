@@ -5,7 +5,7 @@ import { MODELER_PREFIX, getModelBlob, putModel } from '../../world/modelStore.t
 import { buildGeometry, exportPlaceholder, slotMaterial } from './build.ts';
 import { defaultSlot, docFromJSON, docToJSON, isDocJSON, newDoc, newObject, objectMatrix, type MatSlot, type ModelDoc } from './doc.ts';
 import { EditMesh, weld } from './mesh.ts';
-import { polygonize } from './ops.ts';
+import { mirroredMesh, polygonize } from './ops.ts';
 
 // Speichern & Laden der Modeler-Modelle als .glb. Der Bearbeitungsstand (Polygon-Netze) steckt als JSON
 // in den glTF-„extras“ des Wurzelknotens; Materialien tragen ihren Level-Material-Schlüssel (bcMat),
@@ -32,7 +32,7 @@ function buildScene(doc: ModelDoc, real: boolean): THREE.Group {
   });
   for (const o of doc.objects) {
     if (!o.visible || !o.mesh.faces.length) continue;
-    const { geometry } = buildGeometry(o.mesh, {
+    const { geometry } = buildGeometry(mirroredMesh(o.mesh, o.mirror), {
       smooth: o.smooth,
       smoothAngle: o.smoothAngle,
       uvScale: (i) => doc.materials[i]?.uvScale ?? 1,

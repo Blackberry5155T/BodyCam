@@ -317,32 +317,67 @@ export function pickFiles(accept: string): Promise<File[]> {
 
 /** Ziehbare Trennlinien zwischen Panels */
 export function initSplitters(): void {
-  for (const s of document.querySelectorAll<HTMLElement>('.splitter')) {
+  const splitters = [...document.querySelectorAll<HTMLElement>('.splitter')];
+  // details: das Panel darüber (Outliner) wächst nach unten; content/right: das Panel danach wächst zur Mitte
+  const targetOf = (s: HTMLElement) => (s.dataset.split === 'details' ? s.previousElementSibling : s.nextElementSibling);
+  /** Größe begrenzen: Panel nicht zu klein, Rest (Viewport bzw. Details) bleibt benutzbar */
+  const clampSize = (s: HTMLElement, target: HTMLElement, v: number): number => {
+    const vertical = s.classList.contains('vertical');
+    const parent = target.parentElement;
+    const min = vertical ? 240 : 100;
+    if (!parent) return Math.max(min, v);
+    const total = vertical ? parent.clientWidth : parent.clientHeight;
+    const own = vertical ? s.offsetWidth : s.offsetHeight;
+    const keep = vertical ? 320 : 120;
+    return Math.round(Math.min(Math.max(min, total - own - keep), Math.max(min, v)));
+  };
+  const apply = (s: HTMLElement, target: HTMLElement, v: number) => {
+    if (s.classList.contains('vertical')) target.style.width = `${v}px`;
+    else target.style.height = `${v}px`;
+  };
+  for (const s of splitters) {
     const vertical = s.classList.contains('vertical');
     s.addEventListener('pointerdown', (e) => {
-      const target = s.dataset.split === 'right' ? s.nextElementSibling : s.dataset.split === 'content' ? s.nextElementSibling : s.previousElementSibling;
+      if (e.button !== 0) return;
+      const target = targetOf(s);
       if (!(target instanceof HTMLElement)) return;
       e.preventDefault();
       s.setPointerCapture(e.pointerId);
       s.classList.add('dragging');
       const start = vertical ? e.clientX : e.clientY;
       const size = vertical ? target.offsetWidth : target.offsetHeight;
-      // Panels rechts/unten wachsen beim Ziehen in Richtung Mitte
       const sign = s.dataset.split === 'details' ? 1 : -1;
       const move = (ev: PointerEvent) => {
         const d = (vertical ? ev.clientX : ev.clientY) - start;
-        const v = Math.max(100, size + d * sign);
-        if (vertical) target.style.width = `${v}px`;
-        else target.style.height = `${v}px`;
+        apply(s, target, clampSize(s, target, size + d * sign));
         window.dispatchEvent(new Event('resize'));
       };
-      const up = () => {
+      let done = false;
+      const end = () => {
+        if (done) return;
+        done = true;
         s.classList.remove('dragging');
         s.removeEventListener('pointermove', move);
-        s.removeEventListener('pointerup', up);
+        s.removeEventListener('pointerup', end);
+        s.removeEventListener('pointercancel', end);
+        s.removeEventListener('lostpointercapture', end);
+        if (s.hasPointerCapture(e.pointerId)) s.releasePointerCapture(e.pointerId);
       };
       s.addEventListener('pointermove', move);
-      s.addEventListener('pointerup', up);
+      s.addEventListener('pointerup', end);
+      s.addEventListener('pointercancel', end);
+      s.addEventListener('lostpointercapture', end);
     });
   }
+  // Fenster kleiner gezogen: gezogene Panels nachträglich begrenzen
+  window.addEventListener('resize', () => {
+    for (const s of splitters) {
+      const target = targetOf(s);
+      if (!(target instanceof HTMLElement)) continue;
+      const cur = parseFloat(s.classList.contains('vertical') ? target.style.width : target.style.height);
+      if (!Number.isFinite(cur)) continue;
+      const v = clampSize(s, target, cur);
+      if (v !== cur) apply(s, target, v);
+    }
+  });
 }
