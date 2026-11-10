@@ -3,6 +3,7 @@ import type { LandscapeData } from '../landscape/data.ts';
 import { liveLandscapes, type LandscapeRenderer } from '../landscape/render.ts';
 import { foliageQuality } from './render.ts';
 import { grassClearAt, onRoadZonesChanged } from '../splines/zones.ts';
+import { injectAtmosphere } from '../../rendering/atmosphere.ts';
 
 // Layer-Gras: wächst automatisch rund um die Kamera, wo Landscape-Layer mit Gras-Art liegen (Gewicht aus
 // Auto-Regeln + Splatmap). Wird nicht gespeichert, sondern in 16-m-Kacheln erzeugt (höchstens ein paar je Frame).
@@ -124,6 +125,7 @@ function grassMaterial(): THREE.MeshStandardMaterial {
   const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.88, metalness: 0, side: THREE.DoubleSide });
   m.userData.noWeather = true;
   m.onBeforeCompile = (shader) => {
+    injectAtmosphere(shader);
     Object.assign(shader.uniforms, U);
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>\n${VERT_HEAD}`)

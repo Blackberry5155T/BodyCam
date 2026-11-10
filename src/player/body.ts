@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { SCALE } from '../world/collision.ts';
 import { setupLightShadow } from '../world/lightShadow.ts';
+import { injectAtmosphere } from '../rendering/atmosphere.ts';
 import { RAPIER, WORLD_QUERY, type PhysicsWorld } from '../physics/physics.ts';
 
 // Blockout-Spielerkörper aus Würfeln mit Gelenk-Hierarchie (Pivot = Gelenk, Würfel hängt daran).
@@ -41,6 +42,7 @@ export interface BodyAnimState {
 /** Nasse Kleidung: unterhalb der Wasserlinie (Welt-Y) dunkler und glänzender */
 function patchWet(mat: THREE.MeshStandardMaterial, wetY: { value: number }): void {
   mat.onBeforeCompile = (shader) => {
+    injectAtmosphere(shader);
     shader.uniforms.uWetY = wetY;
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying float vWetH;')

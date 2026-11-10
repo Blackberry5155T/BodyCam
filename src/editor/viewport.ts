@@ -352,7 +352,6 @@ export class Viewport {
     this.camera.far = Math.max(4000, this.fog.far * 1.5);
     this.camera.updateProjectionMatrix();
     this.scene.fog = this.showFog ? this.fog : null;
-    this.world.groundFog.visible = w.groundFog && this.showFog;
     this.world.setFog(this.showFog);
     this.renderer.toneMappingExposure = EXPOSURE * w.exposure;
     const wo = findWeather(this.state.map.objects);

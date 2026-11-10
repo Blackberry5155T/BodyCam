@@ -15,6 +15,8 @@ import { LightVisibility } from './lightOcclusion.ts';
 //   - Wind (vom Wetter), Umgebungslicht, Qualität
 
 export const VOLUME_LAYER = 3;
+/** Raymarching-Volumen (Nebel, Lichtkegel): der VolumePass rechnet sie in halber Auflösung */
+export const VOLUME_HALF_LAYER = 5;
 const MAX_DISTURB = 8;
 const MAX_LIGHTS = 4;
 
@@ -125,6 +127,9 @@ class VolumeFX {
     vTime: { value: 0 },
     vWind: { value: new THREE.Vector3() },
     vAmbient: { value: new THREE.Color(0.25, 0.26, 0.28) },
+    // Sonne (Richtung zur Sonne, Farbe × Intensität): gibt Rauch eine beleuchtete und eine Schattenseite
+    vSunDir: { value: new THREE.Vector3(0, 1, 0) },
+    vSunCol: { value: new THREE.Color(0, 0, 0) },
     vSteps: { value: 24 },
     vDisA: { value: Array.from({ length: MAX_DISTURB }, () => new THREE.Vector4()) },
     vDisB: { value: Array.from({ length: MAX_DISTURB }, () => new THREE.Vector4()) },
@@ -154,6 +159,12 @@ class VolumeFX {
   /** Spielerkörper als festes Hindernis für Partikel (Kapsel a → b mit Radius) */
   readonly body = { on: false, a: new THREE.Vector3(), b: new THREE.Vector3(), radius: 0.36 };
   private shots: Disturber[] = [];
+  /** aktive Störer dieses Frames (Spieler zuerst, dann Schüsse) – für CPU-Partikel ohne Closures */
+  readonly disturbers: Disturber[] = [];
+  /** der Spieler-Störer (oder null), zum Unterscheiden in disturbers */
+  get playerDisturber(): Disturber | null {
+    return this.player;
+  }
   private shotListeners = new Set<ShotListener>();
   readonly camPosition = new THREE.Vector3();
 
@@ -236,7 +247,13 @@ class VolumeFX {
       return;
     }
     c.copy(hemi.color).lerp(hemi.groundColor, 0.5).multiplyScalar(hemi.intensity);
-    if (sun && sun.visible) c.add(_col.copy(sun.color).multiplyScalar(sun.intensity * 0.15));
+    const sc = this.uniforms.vSunCol.value;
+    if (sun && sun.visible) {
+      c.add(_col.copy(sun.color).multiplyScalar(sun.intensity * 0.15));
+      this.uniforms.vSunDir.value.copy(sun.position).normalize();
+      // unter dem Horizont kein Sonnenlicht
+      sc.copy(sun.color).multiplyScalar(sun.intensity * THREE.MathUtils.smoothstep(this.uniforms.vSunDir.value.y, -0.05, 0.1));
+    } else sc.setRGB(0, 0, 0);
   }
 
   update(dt: number, t: number, camera: THREE.Camera): void {
@@ -257,13 +274,16 @@ class VolumeFX {
       s.radius = THREE.MathUtils.lerp(s.r0!, s.r1!, 1 - (1 - k) * (1 - k));
       s.strength = (1 - k) * (1 - k);
     }
+    const list = this.disturbers;
+    list.length = 0;
+    if (this.player) list.push(this.player);
+    for (const s of this.shots) list.push(s);
     let n = 0;
-    this.forEachDisturber((d) => {
-      if (n >= MAX_DISTURB) return;
+    for (; n < list.length && n < MAX_DISTURB; n++) {
+      const d = list[n];
       u.vDisA.value[n].set(d.a.x, d.a.y, d.a.z, d.radius);
       u.vDisB.value[n].set(d.b.x, d.b.y, d.b.z, d.strength);
-      n++;
-    });
+    }
     for (; n < MAX_DISTURB; n++) u.vDisB.value[n].w = 0;
 
     // Taschenlampe
@@ -334,11 +354,33 @@ export function sharedUniforms(): typeof volumeFX.uniforms {
   return { ...volumeFX.uniforms };
 }
 
-/** Markiert ein Objekt (und Kinder) als Volumen: eigener Layer, nicht treff-/wählbar */
-export function asVolume<T extends THREE.Object3D>(o: T): T {
+// Alle Volumen-Objekte (schwach referenziert): der VolumePass überspringt Rendern + MSAA-Auflösung,
+// wenn keines davon sichtbar in der Szene hängt
+const volumeRoots: { ref: WeakRef<THREE.Object3D>; marched: boolean }[] = [];
+
+/** Hängt ein Volumen-Objekt dieser Art (marched: Raymarching-Volumen, sonst Partikel) sichtbar in der Szene? */
+export function anyVolumeVisible(scene: THREE.Object3D, marched: boolean): boolean {
+  for (let i = volumeRoots.length - 1; i >= 0; i--) {
+    const o = volumeRoots[i].ref.deref();
+    if (!o) {
+      volumeRoots[i] = volumeRoots[volumeRoots.length - 1];
+      volumeRoots.pop();
+      continue;
+    }
+    if (volumeRoots[i].marched !== marched) continue;
+    let c: THREE.Object3D | null = o;
+    for (; c && c.visible; c = c.parent) if (c === scene) return true;
+  }
+  return false;
+}
+
+/** Markiert ein Objekt (und Kinder) als Volumen: eigener Layer, nicht treff-/wählbar.
+ *  marched = Raymarching-Volumen ohne Tiefentest (wird in halber Auflösung gerechnet, siehe VolumePass) */
+export function asVolume<T extends THREE.Object3D>(o: T, marched = false): T {
+  volumeRoots.push({ ref: new WeakRef(o), marched });
   o.traverse((c) => {
     if ((c as THREE.Light).isLight) return;
-    c.layers.set(VOLUME_LAYER);
+    c.layers.set(marched ? VOLUME_HALF_LAYER : VOLUME_LAYER);
     c.userData.noPick = true;
     c.userData.noShot = true;
   });
@@ -357,6 +399,7 @@ uniform sampler3D vNoise;
 uniform float vTime;
 uniform vec3 vWind;
 uniform vec3 vAmbient;
+uniform vec3 vSunDir, vSunCol;
 uniform int vSteps;
 uniform vec4 vDisA[${MAX_DISTURB}];
 uniform vec4 vDisB[${MAX_DISTURB}];
@@ -369,45 +412,9 @@ uniform vec4 vLightCol[${MAX_LIGHTS}];
 uniform vec4 vLightSpot[${MAX_LIGHTS}];
 `;
 
-/** Uniforms + Fragment-Hilfsfunktionen */
-export const VOLUME_GLSL = /* glsl */ `
-${VOLUME_UNIFORMS}
-const float PI_V = 3.14159265;
-
-float vHash(vec3 p) {
-  p = fract(p * 0.1031);
-  p += dot(p, p.zyx + 31.32);
-  return fract((p.x + p.y) * p.z);
-}
-/** Interleaved Gradient Noise: gleichmäßiges Dithering gegen Banding */
-float vIGN(vec2 px) {
-  return fract(52.9829189 * fract(dot(px + vec2(5.588238, 5.588238) * mod(vTime * 60.0, 64.0), vec2(0.06711056, 0.00583715))));
-}
-float vNoise3(vec3 p) { return texture(vNoise, p).r; }
-/** zweistufiges Wolkenrauschen (grob + Detail) */
-float vCloud(vec3 p) {
-  return vNoise3(p * 0.25) * 0.7 + vNoise3(p * 0.73 + 0.37) * 0.3;
-}
-
-/** lineare Szenentiefe (Kameraachse) am aktuellen Pixel, 1e6 ohne Tiefe */
-float vSceneLinear() {
-  if (vDepthOn < 0.5) return 1e6;
-  float d = texture2D(vDepth, gl_FragCoord.xy / vScreen).x;
-#ifdef USE_REVERSED_DEPTH_BUFFER
-  // Reversed-Z: Near = 1, Far/Himmel = 0
-  if (d <= 1e-7) return 1e6;
-  return vNear * vFar / (vNear + d * (vFar - vNear));
-#else
-  if (d >= 0.99999) return 1e6;
-  return vNear * vFar / (vFar - d * (vFar - vNear));
-#endif
-}
-vec3 vCamForward() { return -vec3(viewMatrix[0][2], viewMatrix[1][2], viewMatrix[2][2]); }
-/** Distanz von der Kamera bis zur Szene entlang der (Welt-)Blickrichtung rd */
-float vSceneDistance(vec3 rd) {
-  return vSceneLinear() / max(dot(rd, vCamForward()), 1e-3);
-}
-
+/** Licht- und Verdrängungs-Funktionen: ohne gl_FragCoord, also auch im Vertex-Shader nutzbar
+ *  (Rauch rechnet sein Licht je Ecke statt je Pixel – bei viel Überdeckung der größte Posten) */
+export const VOLUME_LIGHT_GLSL = /* glsl */ `
 /** 0..1: wie stark Spieler/Schüsse das Medium an p verdrängen */
 float vDisturb(vec3 p) {
   float k = 0.0;
@@ -447,9 +454,11 @@ float vLampShadowAt(vec3 p) {
 }
 
 /** Einfallendes Licht an p (Blickrichtung rd), g = Vorwärtsstreuung;
- *  vis[i] = Sichtbarkeit von Effektlicht i an p (0 = hinter einer Wand, siehe lightOcclusion.ts) */
-vec3 vLightAtVis(vec3 p, vec3 rd, float g, bool lampShadow, vec4 vis) {
+ *  vis[i] = Sichtbarkeit von Effektlicht i an p (0 = hinter einer Wand, siehe lightOcclusion.ts);
+ *  dir: Summe der Lichtrichtungen, gewichtet mit ihrer Helligkeit (für eine helle und eine dunkle Seite) */
+vec3 vLightDir(vec3 p, vec3 rd, float g, bool lampShadow, vec4 vis, out vec3 dir) {
   vec3 L = vec3(0.0);
+  dir = vec3(0.0);
   vec3 tl = vLampPos - p;
   float dl = length(tl);
   if (dot(vLampColor, vLampColor) > 0.0 && dl < vLampCone.z) {
@@ -459,7 +468,9 @@ vec3 vLightAtVis(vec3 p, vec3 rd, float g, bool lampShadow, vec4 vis) {
       float win = 1.0 - pow(dl / vLampCone.z, 4.0);
       float att = spot * win * win / (dl * dl + 0.25);
       if (lampShadow) att *= vLampShadowAt(p);
-      L += vLampColor * att * vPhase(dot(rd, -l), g);
+      vec3 c = vLampColor * att * vPhase(dot(rd, -l), g);
+      L += c;
+      dir += l * (c.r + c.g + c.b);
     }
   }
   for (int i = 0; i < ${MAX_LIGHTS}; i++) {
@@ -473,14 +484,63 @@ vec3 vLightAtVis(vec3 p, vec3 rd, float g, bool lampShadow, vec4 vis) {
     vec4 s = vLightSpot[i];
     float spot = s.w < -1.5 ? 1.0 : smoothstep(s.w, c.w, dot(-l, s.xyz));
     float win = 1.0 - pow(d / lp.w, 4.0);
-    L += c.rgb * spot * win * win / (d * d + 0.25) * vPhase(dot(rd, -l), g * 0.6) * vis[i];
+    vec3 k = c.rgb * spot * win * win / (d * d + 0.25) * vPhase(dot(rd, -l), g * 0.6) * vis[i];
+    L += k;
+    dir += l * (k.r + k.g + k.b);
   }
   return L;
+}
+vec3 vLightAtVis(vec3 p, vec3 rd, float g, bool lampShadow, vec4 vis) {
+  vec3 dir;
+  return vLightDir(p, rd, g, lampShadow, vis, dir);
 }
 vec3 vLightAt(vec3 p, vec3 rd, float g, bool lampShadow) {
   return vLightAtVis(p, rd, g, lampShadow, vec4(1.0));
 }
+`;
 
+/** Uniforms + Fragment-Hilfsfunktionen */
+export const VOLUME_GLSL = /* glsl */ `
+${VOLUME_UNIFORMS}
+const float PI_V = 3.14159265;
+
+float vHash(vec3 p) {
+  p = fract(p * 0.1031);
+  p += dot(p, p.zyx + 31.32);
+  return fract((p.x + p.y) * p.z);
+}
+/** Interleaved Gradient Noise: gleichmäßiges Dithering gegen Banding */
+float vIGN(vec2 px) {
+  return fract(52.9829189 * fract(dot(px + vec2(5.588238, 5.588238) * mod(vTime * 60.0, 64.0), vec2(0.06711056, 0.00583715))));
+}
+float vNoise3(vec3 p) { return texture(vNoise, p).r; }
+/** zweistufiges Wolkenrauschen (grob + Detail) */
+float vCloud(vec3 p) {
+  // Domain-Warp: eine tieffrequente Probe verbiegt die Koordinaten → Schlieren und Schwaden statt runder Kleckse
+  p += (vNoise3(p * 0.09 + 0.31) - 0.5) * vec3(1.7, 0.6, -1.3);
+  return vNoise3(p * 0.25) * 0.7 + vNoise3(p * 0.73 + 0.37) * 0.3;
+}
+
+/** lineare Szenentiefe (Kameraachse) am aktuellen Pixel, 1e6 ohne Tiefe */
+float vSceneLinear() {
+  if (vDepthOn < 0.5) return 1e6;
+  float d = texture2D(vDepth, gl_FragCoord.xy / vScreen).x;
+#ifdef USE_REVERSED_DEPTH_BUFFER
+  // Reversed-Z: Near = 1, Far/Himmel = 0
+  if (d <= 1e-7) return 1e6;
+  return vNear * vFar / (vNear + d * (vFar - vNear));
+#else
+  if (d >= 0.99999) return 1e6;
+  return vNear * vFar / (vFar - d * (vFar - vNear));
+#endif
+}
+vec3 vCamForward() { return -vec3(viewMatrix[0][2], viewMatrix[1][2], viewMatrix[2][2]); }
+/** Distanz von der Kamera bis zur Szene entlang der (Welt-)Blickrichtung rd */
+float vSceneDistance(vec3 rd) {
+  return vSceneLinear() / max(dot(rd, vCamForward()), 1e-3);
+}
+
+${VOLUME_LIGHT_GLSL}
 /** weiches Ausblenden an Geometrie (Soft Particles), viewDepth = lineare Tiefe des Fragments */
 float vSoftFade(float viewDepth, float range) {
   return clamp((vSceneLinear() - viewDepth) / range, 0.0, 1.0);
@@ -496,15 +556,14 @@ ${VOLUME_GLSL}
 /** Szenen-Nebel auf vormultiplizierte Farbe (rgb, alpha) anwenden */
 export const FOG_PREMUL = /* glsl */ `
 #ifdef USE_FOG
-  float fogF = smoothstep(fogNear, fogFar, vFogDepth);
-  gl_FragColor.rgb = mix(gl_FragColor.rgb, fogColor * gl_FragColor.a, fogF);
+  gl_FragColor.rgb = mix(gl_FragColor.rgb, bcFogColor(vFogRay) * gl_FragColor.a, bcFogFactor(vFogRay));
 #endif
 `;
 
 /** Additiv: im Nebel verschwinden */
 export const FOG_ADDITIVE = /* glsl */ `
 #ifdef USE_FOG
-  gl_FragColor.rgb *= 1.0 - smoothstep(fogNear, fogFar, vFogDepth);
+  gl_FragColor.rgb *= 1.0 - bcFogFactor(vFogRay);
 #endif
 `;
 
@@ -678,7 +737,9 @@ export function createFogVolume(p: FogVolumeParams): { mesh: THREE.Mesh; update(
         tf = min(tf, vSceneDistance(wrd) * k);
         if (tf <= tn) discard;
 
-        int steps = vSteps;
+        // Schrittzahl nach Weglänge: kurze Strecken (Ecken, dünne Volumen, dicht vor einer Wand) brauchen
+        // nur wenige Proben; lange bekommen das volle Budget der Qualitätsstufe
+        int steps = clamp(int((tf - tn) / k * 4.0) + 5, 6, vSteps);
         float stepL = (tf - tn) / float(steps);
         float stepW = stepL / k; // Schrittweite in Metern
         float jitter = vIGN(gl_FragCoord.xy);
@@ -690,10 +751,15 @@ export function createFogVolume(p: FogVolumeParams): { mesh: THREE.Mesh; update(
           if (i >= steps) break;
           vec3 p = ro + rd * (tn + stepL * (float(i) + jitter));
           vec3 e = 0.5 - abs(p);
-          float edge = smoothstep(0.0, uEdge, min(min(e.x, e.y), e.z));
+          // Produkt statt Minimum: Ecken und Kanten laufen rund aus
+          vec3 ef = smoothstep(vec3(0.0), vec3(uEdge), e);
+          float edge = ef.x * ef.y * ef.z;
           float h = mix(1.0, 1.0 - smoothstep(-0.5, 0.5, p.y), uHeight);
           vec3 wp = (uModel * vec4(p, 1.0)).xyz;
-          float n = mix(1.0, vCloud(wp * uNoiseScale + drift * uNoiseScale) * 1.7, uNoise);
+          float cl = vCloud(wp * uNoiseScale + drift * uNoiseScale);
+          float n = mix(1.0, cl * 1.7, uNoise);
+          // Rand vom Rauschen angefressen: Schwaden ragen heraus, Lücken reichen hinein – keine sichtbare Kiste
+          edge = clamp(edge + (cl - 0.55) * uNoise * 1.3 * (1.0 - edge), 0.0, 1.0) * min(1.0, edge * 6.0);
           float dens = uDensity * edge * h * max(n, 0.0);
           if (uInteract > 0.5) dens *= 1.0 - vDisturb(wp);
           if (dens < 1e-4) continue;
@@ -705,7 +771,11 @@ export function createFogVolume(p: FogVolumeParams): { mesh: THREE.Mesh; update(
           if (T < 0.01) break;
         }
         gl_FragColor = vec4(C, 1.0 - T);
-        ${FOG_PREMUL}
+        // Distanznebel für die Mitte der durchquerten Strecke (nicht für die Rückwand der Box)
+        #ifdef USE_FOG
+          vec3 midRay = wrd * ((tn + tf) * 0.5 / k);
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, bcFogColor(midRay) * gl_FragColor.a, bcFogFactor(midRay));
+        #endif
       }
     `,
   });
@@ -716,7 +786,7 @@ export function createFogVolume(p: FogVolumeParams): { mesh: THREE.Mesh; update(
     uniforms.uModel.value.copy(mesh.matrixWorld);
     uniforms.uInvModel.value.copy(mesh.matrixWorld).invert();
   };
-  asVolume(mesh);
+  asVolume(mesh, true);
 
   // Licht-Verdeckung: Gitter im Einheitswürfel, neu bei Verschieben/Skalieren
   const grid = new VisGrid(mesh, uniforms.uLightVis, uniforms.uLightVisOn);
@@ -792,7 +862,13 @@ export function createLightCone(p: LightConeParams): {
     depthWrite: false,
     depthTest: false,
     side: THREE.BackSide,
-    blending: THREE.AdditiveBlending,
+    // rein additiv, Alpha des Ziels bleibt unberührt (im Halb-Target ist Alpha die Deckung des Nebels)
+    blending: THREE.CustomBlending,
+    blendEquation: THREE.AddEquation,
+    blendSrc: THREE.OneFactor,
+    blendDst: THREE.OneFactor,
+    blendSrcAlpha: THREE.ZeroFactor,
+    blendDstAlpha: THREE.OneFactor,
     fog: true,
     vertexShader: /* glsl */ `
       varying vec3 vWorld;
@@ -823,9 +899,10 @@ export function createLightCone(p: LightConeParams): {
       ${VOLUME_HEAD}
       /** erreicht Licht von der Kegelspitze den Punkt wp? */
       float coneVisibility(vec3 wp) {
-        if (uShadowOn > 0.5) return vShadowAt(uShadow, uShadowMat, wp);
-        for (int i = 0; i < ${MAX_OCC}; i++) {
-          if (i >= uOccN) break;
+        float visible = 1.0;
+        if (uShadowOn > 0.5) visible = vShadowAt(uShadow, uShadowMat, wp);
+        else for (int i = 0; i < ${MAX_OCC}; i++) {
+          if (i >= uOccN || visible < 0.5) break;
           // Strecke Spitze → wp im lokalen Raum der Box (Spitze dort vorberechnet), Slab-Test für t in [0, 1]
           vec3 a = uOccA[i];
           vec3 d = uOccR[i] * (wp - uOccC[i]) - a;
@@ -838,9 +915,9 @@ export function createLightCone(p: LightConeParams): {
           float en = max(max(max(tn.x, tn.y), tn.z), 0.0);
           float ex = min(min(min(tf.x, tf.y), tf.z), 1.0);
           // nur echte Durchquerung zählt (Streifen an der Oberfläche, z. B. Lampe bündig an der Decke, nicht)
-          if ((ex - en) * length(d) > 0.03) return 0.0;
+          if ((ex - en) * length(d) > 0.03) visible = 0.0;
         }
-        return 1.0;
+        return visible;
       }
       void main() {
         vec3 wrd = normalize(vWorld - cameraPosition);
@@ -903,7 +980,7 @@ export function createLightCone(p: LightConeParams): {
     uniforms.uShadowOn.value = depth ? 1 : 0;
     if (depth) uniforms.uShadowMat.value.copy(light!.shadow.matrix);
   };
-  asVolume(mesh);
+  asVolume(mesh, true);
 
   // Verdecker aus den Map-Collidern: periodisch bzw. sofort, wenn sich Lage oder Collider-Liste ändern
   const lastMatrix = new THREE.Matrix4();

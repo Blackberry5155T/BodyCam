@@ -81,7 +81,9 @@ export interface WorldSettings {
   viewDistance: number;
   groundFog: boolean;
   groundFogOpacity: number;
+  /** Dicke der Bodennebel-Schicht ab y = 0 (m); darüber läuft sie exponentiell aus */
   groundFogHeight: number;
+  /** nicht mehr benutzt: der Bodennebel ist eine Höhennebel-Schicht über der ganzen Map (rendering/atmosphere.ts) */
   groundFogSize: number;
   exposure: number;
   /** Wettertyp: klar | niesel | regen | gewitter | schnee */

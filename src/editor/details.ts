@@ -476,9 +476,8 @@ export class DetailsPanel {
         num('Sichtweite (m)', 'viewDistance', 10, 20, 10000),
         bool('Bodennebel-Schicht', 'groundFog'),
         num('Bodennebel Deckkraft', 'groundFogOpacity', 0.01, 0, 1),
-        num('Bodennebel Höhe', 'groundFogHeight', 0.05),
-        num('Bodennebel Größe', 'groundFogSize', 1, 1, 500),
-        h('div', { class: 'script-summary' }, h('div', { class: 'events' }, 'Sichtweite = Distanznebel bei voller Spieler-Einstellung (Mausrad / Grafik-Menü skaliert sie). Große Landschaften: mehrere hundert Meter bis km. Für lokalen Nebel: Volumetrik → Nebelvolumen.')),
+        num('Bodennebel Dicke (m)', 'groundFogHeight', 0.05),
+        h('div', { class: 'script-summary' }, h('div', { class: 'events' }, 'Sichtweite = Distanznebel bei voller Spieler-Einstellung (Mausrad / Grafik-Menü skaliert sie). Große Landschaften: mehrere hundert Meter bis km. Bodennebel liegt als Höhennebel-Schicht über der ganzen Map (ab y = 0, nach oben dünner). Für lokalen Nebel: Volumetrik → Nebelvolumen.')),
       ),
       weatherObj
         ? this.section(

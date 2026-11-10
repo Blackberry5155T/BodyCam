@@ -50,6 +50,7 @@ export const QUALITY_LABELS = ['Niedrig', 'Mittel', 'Hoch', 'Ultra', 'Benutzerde
 export const SHADOW_LABELS = ['Aus', 'Niedrig', 'Hoch'];
 export const REFLECTION_LABELS = ['Aus', 'Niedrig', 'Hoch'];
 export const VOLUMETRIC_LABELS = ['Niedrig', 'Mittel', 'Hoch'];
+export const AO_LABELS = ['Aus', 'Niedrig', 'Hoch'];
 export const TERRAIN_LABELS = ['Niedrig', 'Mittel', 'Hoch', 'Ultra'];
 /** Detail-Faktor der Landscape-LODs (Abstand, ab dem eine gröbere Stufe benutzt wird) */
 export const TERRAIN_DETAIL = [1.5, 2, 2.5, 3.5];
@@ -78,6 +79,7 @@ export interface SettingsData {
   godRays: number; // Stärke der Sonnenstrahlen (0 = aus)
   reflections: number; // Index in REFLECTION_LABELS (Pfützen-Spiegelungen)
   volumetrics: number; // Index in VOLUMETRIC_LABELS (Nebel-Schritte, Partikelmenge)
+  ao: number; // Index in AO_LABELS (Umgebungsverdeckung / Kontaktschatten)
   terrainDetail: number; // Index in TERRAIN_LABELS (Landscape-LOD)
   foliageDensity: number; // Index in FOLIAGE_LABELS (FOLIAGE_DENSITY)
   foliageDistance: number; // Index in FOLIAGE_LABELS (FOLIAGE_DISTANCE)
@@ -91,6 +93,8 @@ export interface SettingsData {
   aberration: number;
   vignette: number;
   hudOverlay: boolean;
+  motionBlur: number; // Bewegungsunschärfe der Kamera (0 = aus, 1 = volle Verschlusszeit)
+  autoExposure: boolean; // Belichtungsautomatik (Kamera regelt hell/dunkel träge nach)
   // Matchmaking
   mmMode: number;
   mmRegion: number;
@@ -98,14 +102,14 @@ export interface SettingsData {
 }
 
 /** Optionen, die das Qualitäts-Preset setzt */
-const PRESET_KEYS = ['shadows', 'renderScale', 'bloom', 'reflections', 'volumetrics', 'terrainDetail', 'foliageDensity', 'foliageDistance', 'grass'] as const;
+const PRESET_KEYS = ['shadows', 'renderScale', 'bloom', 'reflections', 'volumetrics', 'ao', 'terrainDetail', 'foliageDensity', 'foliageDistance', 'grass'] as const;
 type PresetKey = (typeof PRESET_KEYS)[number];
 
 export const QUALITY_PRESETS: Pick<SettingsData, PresetKey>[] = [
-  { shadows: 0, renderScale: 0.75, bloom: false, reflections: 0, volumetrics: 0, terrainDetail: 0, foliageDensity: 0, foliageDistance: 0, grass: false },
-  { shadows: 1, renderScale: 1.0, bloom: true, reflections: 1, volumetrics: 1, terrainDetail: 1, foliageDensity: 1, foliageDistance: 1, grass: true },
-  { shadows: 2, renderScale: 1.0, bloom: true, reflections: 2, volumetrics: 2, terrainDetail: 2, foliageDensity: 2, foliageDistance: 2, grass: true },
-  { shadows: 2, renderScale: 1.5, bloom: true, reflections: 2, volumetrics: 2, terrainDetail: 3, foliageDensity: 3, foliageDistance: 3, grass: true },
+  { shadows: 0, renderScale: 0.75, bloom: false, reflections: 0, volumetrics: 0, ao: 0, terrainDetail: 0, foliageDensity: 0, foliageDistance: 0, grass: false },
+  { shadows: 1, renderScale: 1.0, bloom: true, reflections: 1, volumetrics: 1, ao: 1, terrainDetail: 1, foliageDensity: 1, foliageDistance: 1, grass: true },
+  { shadows: 2, renderScale: 1.0, bloom: true, reflections: 2, volumetrics: 2, ao: 2, terrainDetail: 2, foliageDensity: 2, foliageDistance: 2, grass: true },
+  { shadows: 2, renderScale: 1.5, bloom: true, reflections: 2, volumetrics: 2, ao: 2, terrainDetail: 3, foliageDensity: 3, foliageDistance: 3, grass: true },
 ];
 
 const DEFAULTS: SettingsData = {
@@ -122,6 +126,7 @@ const DEFAULTS: SettingsData = {
   godRays: 1,
   reflections: 2,
   volumetrics: 2,
+  ao: 2,
   terrainDetail: 2,
   foliageDensity: 2,
   foliageDistance: 2,
@@ -134,6 +139,8 @@ const DEFAULTS: SettingsData = {
   aberration: 1,
   vignette: 1,
   hudOverlay: true,
+  motionBlur: 0.5,
+  autoExposure: true,
   mmMode: 0,
   mmRegion: 0,
   mmParty: 0,

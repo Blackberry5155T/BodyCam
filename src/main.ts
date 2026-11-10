@@ -4,6 +4,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { Pass } from 'three/examples/jsm/postprocessing/Pass.js';
 import { MAPS, loadBundledMap } from './maps/index.ts';
 import { CAMERA_DROP, CAMERA_FORWARD, PlayerController } from './player/controller.ts';
 import { PlayerBody } from './player/body.ts';
@@ -26,6 +27,11 @@ import { WEATHER_TYPE, weatherWorld } from './world/weatherObject.ts';
 import { volumeFX } from './world/volumetrics.ts';
 import { VolumePass } from './rendering/volumePass.ts';
 import { GodRaysPass } from './rendering/godRaysPass.ts';
+import { AOPass } from './rendering/postfx/aoPass.ts';
+import { AutoExposure } from './rendering/postfx/autoExposure.ts';
+import { MotionBlurPass } from './rendering/postfx/motionBlurPass.ts';
+import { ShadowScheduler } from './rendering/shadowScheduler.ts';
+import { atmosphere } from './rendering/atmosphere.ts';
 import { PhysicsWorld, initPhysics } from './physics/physics.ts';
 import { LandscapeRenderer, landscapeSurfaceOf, surfaceAtWorld, updateLandscapes } from './world/landscape/render.ts';
 import { setFoliageQuality, setFoliageRenderer, updateFoliage, updateFoliageColliders } from './world/foliage/render.ts';
@@ -148,8 +154,6 @@ scene.add(camera);
 const anisotropy = renderer.capabilities.getMaxAnisotropy();
 const level = loadMap(mapData, { anisotropy, editor: false, blobs: mapBlobs });
 scene.add(level.group);
-// Fog-Plane: bodennahe Nebelschicht, grobe Simulation für Sichtlinien-Tests
-const fogPlane = level.world.groundFog;
 // Landscape-Höhen werden asynchron geladen (Blob) — vor Spawn und Physik abwarten
 await loading.track(
   level.nodes.map((n) => n.instance?.ready).filter((p): p is Promise<void> => !!p),
@@ -202,7 +206,7 @@ const water = new WaterSystem(renderer, scene, level.world, {
 const dynProps = new DynamicProps(physics, level.nodes, level.colliders);
 dynProps.onSplash = (s) => playWater('splash', s.strength * 0.8);
 // Dev: Zugriff für Tests/Konsole
-if (import.meta.env.DEV) (window as unknown as { __game: unknown }).__game = { player, body, water, dynProps, camera, scene };
+if (import.meta.env.DEV) (window as unknown as { __game: unknown }).__game = { player, body, water, dynProps, camera, scene, weather, settings, level, renderer };
 // Oberflächen (Landscape-Layer, Wetter: nasse Erde → Schlamm, Schneedecke): Schritte und Einschläge
 unlockAudio();
 player.onFootstep = (kind, feet, speed, crouching) => {
@@ -305,6 +309,9 @@ const terminalActive = () => terminal?.active ?? false;
 const lookRay = new THREE.Raycaster();
 lookRay.far = 20; // große Bildschirme sind aus der Ferne bedienbar; Reichweiten werden einzeln geprüft
 let lookingAtTerminal = false;
+const SCREEN_CENTER = new THREE.Vector2(0, 0);
+let lookTimer = 0;
+let lookHit: THREE.Intersection | undefined;
 
 // --- Programmierbare Bildschirme (Figuren + Blöcke aus dem Editor) ---
 interface GameScreen {
@@ -319,6 +326,8 @@ const gameScreens: GameScreen[] = [];
 let activeScreen: GameScreen | null = null;
 /** Bildschirm im Fadenkreuz */
 let aimScreen: GameScreen | null = null;
+/** Countdown je Bildschirm bis zum nächsten Neuzeichnen */
+const screenTimers: number[] = [];
 const SCREEN_MENU_FOV = 50;
 const SCREEN_CURSOR_SPEED = 0.55;
 const _sc = new THREE.Vector3();
@@ -432,18 +441,46 @@ window.addEventListener('keydown', (e) => {
 
 // --- Post-Processing: Szene → Bloom → Tonemapping/sRGB → Bodycam-Linse ---
 // Tiefentextur: Volumen (Nebel, Rauch, Feuer) lesen die Szenentiefe und enden sauber an Geometrie
+// Zwei Ketten: die Szene (Geometrie, Kontaktschatten, Wasser, Volumen, God-Rays) in ein MSAA-Target,
+// die Nachbearbeitung (Bewegungsunschärfe, Bloom, Tonemapping, Linse) danach ohne MSAA – jeder Pass, der in
+// einen MSAA-Puffer schreibt, kostet sonst eine weitere Auflösung des ganzen Bildes.
 const renderTarget = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4, depthTexture: new THREE.DepthTexture(1, 1, THREE.FloatType) });
-const composer = new EffectComposer(renderer, renderTarget);
-composer.setPixelRatio(pixelRatio());
-composer.setSize(window.innerWidth, window.innerHeight);
-composer.addPass(new RenderPass(scene, camera));
-composer.addPass(new WaterPass(scene, camera));
-composer.addPass(new VolumePass(scene, camera));
+const sceneComposer = new EffectComposer(renderer, renderTarget);
+sceneComposer.renderToScreen = false;
+sceneComposer.setPixelRatio(pixelRatio());
+sceneComposer.setSize(window.innerWidth, window.innerHeight);
+/** Die Tiefe des MSAA-Puffers nur auflösen, wenn ein Pass sie verändert hat (Szene, Wasser) */
+const resolveDepth = (on: boolean) => {
+  const p = new Pass();
+  p.needsSwap = false;
+  p.render = (_r, _w, readBuffer) => void (readBuffer.resolveDepthBuffer = on);
+  return p;
+};
+sceneComposer.addPass(resolveDepth(true));
+sceneComposer.addPass(new RenderPass(scene, camera));
+sceneComposer.addPass(resolveDepth(false));
+// Kontaktschatten (SSAO) direkt auf der opaken Szene – Wasser, Nebel und Rauch liegen unverdunkelt darüber
+const ao = new AOPass(camera);
+sceneComposer.addPass(ao);
+sceneComposer.addPass(resolveDepth(true));
+sceneComposer.addPass(new WaterPass(scene, camera));
+sceneComposer.addPass(resolveDepth(false));
+sceneComposer.addPass(new VolumePass(scene, camera));
 // God-Rays: Sonnenstrahlen durch Himmelslücken (vor Bloom, damit sie mitleuchten)
 const godRays = new GodRaysPass(camera, level.world.sun);
 godRays.strength = settings.data.godRays;
 godRays.enabled = settings.data.godRays > 0;
-composer.addPass(godRays);
+sceneComposer.addPass(godRays);
+// Belichtungsautomatik misst das fertige HDR-Bild der Szene
+const autoExposure = new AutoExposure();
+sceneComposer.addPass(autoExposure);
+// Nachbearbeitung: Bewegungsunschärfe holt das Szenenbild in die MSAA-freie Kette (ohne Unschärfe: Kopie)
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false }));
+composer.setPixelRatio(pixelRatio());
+composer.setSize(window.innerWidth, window.innerHeight);
+const motionBlur = new MotionBlurPass(camera, () => sceneComposer.readBuffer);
+composer.addPass(motionBlur);
+if (import.meta.env.DEV) Object.assign((window as unknown as { __game: object }).__game, { ao, autoExposure, motionBlur, godRays });
 const BLOOM_BASE_STRENGTH = 0.55;
 const bloom = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), BLOOM_BASE_STRENGTH, 0.5, 1.0);
 composer.addPass(bloom);
@@ -455,6 +492,8 @@ const updateResolution = () => {
   const pr = pixelRatio();
   renderer.setPixelRatio(pr);
   renderer.setSize(window.innerWidth, window.innerHeight);
+  sceneComposer.setPixelRatio(pr);
+  sceneComposer.setSize(window.innerWidth, window.innerHeight);
   composer.setPixelRatio(pr);
   composer.setSize(window.innerWidth, window.innerHeight);
   bodycam.uniforms.uResolution.value.set(window.innerWidth * pr, window.innerHeight * pr);
@@ -492,15 +531,28 @@ const applySetting = (key: keyof SettingsData) => {
   const d = settings.data;
   switch (key) {
     case 'brightness':
-      renderer.toneMappingExposure = EXPOSURE * world.exposure * d.brightness;
+      renderer.toneMappingExposure = EXPOSURE * world.exposure * d.brightness * autoExposure.exposure;
       break;
     case 'fogEnabled':
       scene.fog = d.fogEnabled ? fog : null;
-      fogPlane.visible = d.fogEnabled && world.groundFog;
+      // schaltet auch Höhennebel und Sonnen-Einstreuung (rendering/atmosphere.ts)
       level.world.setFog(d.fogEnabled);
       break;
     case 'viewDistance':
       fog.far = fogFar(d.viewDistance);
+      // hinter dem Nebel braucht es keine Kontaktschatten
+      ao.fadeDistance = Math.min(70, fog.far);
+      break;
+    case 'ao':
+      ao.enabled = d.ao > 0;
+      ao.setQuality(d.ao);
+      break;
+    case 'motionBlur':
+      motionBlur.strength = d.motionBlur;
+      break;
+    case 'autoExposure':
+      autoExposure.enabled = d.autoExposure;
+      if (!d.autoExposure) autoExposure.reset();
       break;
     case 'terrainDetail':
       LandscapeRenderer.detail = TERRAIN_DETAIL[d.terrainDetail] ?? 2.5;
@@ -552,7 +604,7 @@ const updateInfo = () => {
     `Mausrad Sichtweite · ${k('fog')} Nebel · ${k('hud')} Debug-Text`;
 };
 
-for (const k of ['brightness', 'fogEnabled', 'viewDistance', 'bloom', 'bloomStrength', 'renderScale', 'shadows', 'reflections', 'terrainDetail', 'hudOverlay', 'bindings'] as const) {
+for (const k of ['brightness', 'fogEnabled', 'viewDistance', 'bloom', 'bloomStrength', 'renderScale', 'shadows', 'reflections', 'terrainDetail', 'ao', 'motionBlur', 'autoExposure', 'hudOverlay', 'bindings'] as const) {
   applySetting(k);
 }
 
@@ -691,6 +743,9 @@ window.addEventListener('resize', () => {
   }
 });
 
+// Schattenkarten der Lampen nur so oft erneuern, wie es sichtbar ist (Taschenlampe: immer)
+const shadowScheduler = new ShadowScheduler(scene, [body.flashlight]);
+
 // --- Shader vorab kompilieren (sonst ruckeln die ersten Frames) ---
 await loading.step(0.8, 'Shader werden kompiliert …');
 try {
@@ -705,6 +760,7 @@ let firstFrame = true;
 const timer = new THREE.Timer();
 timer.connect(document);
 let fpsAccum = 0;
+let statsTimer = 0;
 let fpsFrames = 0;
 let fps = 0;
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -758,6 +814,8 @@ function updateWaterFx(dt: number): void {
   }
   if (under !== uwActive) {
     uwActive = under;
+    // unter Wasser nur der Nebel des Wassers (kein Höhennebel, keine Sonnen-Einstreuung)
+    atmosphere.setSuppressed(under);
     if (under) {
       savedBg = scene.background;
       scene.fog = uwFog;
@@ -814,8 +872,15 @@ renderer.setAnimationLoop(() => {
   scripts.update(dt);
   level.update(dt, t);
   terminal?.update(dt);
-  for (const gs of gameScreens) {
+  for (let i = 0; i < gameScreens.length; i++) {
+    const gs = gameScreens[i];
     gs.rt.update(dt);
+    // Neuzeichnen + Textur-Upload sind teuer: benutzte/anvisierte Bildschirme jeden Frame,
+    // nahe mit 30 Hz, ferne mit 6 Hz
+    screenTimers[i] = (screenTimers[i] ?? 0) - dt;
+    const focused = gs === activeScreen || gs === aimScreen;
+    if (!focused && screenTimers[i] > 0) continue;
+    screenTimers[i] = gs.surf.mesh.getWorldPosition(_sc).distanceToSquared(camera.position) < 30 * 30 ? 1 / 30 : 1 / 6;
     gs.rt.draw(gs.surf.ctx, SCREEN_PX);
     gs.surf.texture.needsUpdate = true;
   }
@@ -838,8 +903,14 @@ renderer.setAnimationLoop(() => {
   let aimed: GameScreen | null = null;
   if (activeScreen) promptText = 'Zurück';
   else if (!uiActive()) {
-    lookRay.setFromCamera(new THREE.Vector2(0, 0), camera);
-    const hit = lookRay.intersectObject(level.group, true).find((h) => isSolid(h.object));
+    // Der Blick-Raycast geht durch die ganze Map: nur ~12×/s, außer ein Bildschirm folgt dem Fadenkreuz
+    lookTimer -= dt;
+    if (lookTimer <= 0 || aimScreen?.control === 'aim') {
+      lookTimer = 0.08;
+      lookRay.setFromCamera(SCREEN_CENTER, camera);
+      lookHit = lookRay.intersectObject(level.group, true).find((h) => isSolid(h.object));
+    }
+    const hit = lookHit;
     const gs = hit?.object.userData.screenSurface ? gameScreens.find((g) => g.surf.mesh === hit.object) : undefined;
     if (gs && hit && gs.control !== 'none' && hit.distance <= Math.max(INTERACT_RANGE, gs.surf.widthM * 1.6)) {
       aimed = gs;
@@ -890,6 +961,7 @@ renderer.setAnimationLoop(() => {
   u.uWaterTint.value.copy(uwColor);
   godRays.overcast = level.world.cloudiness;
   godRays.fade = 1 - uwBlend;
+  renderer.toneMappingExposure = EXPOSURE * world.exposure * d.brightness * autoExposure.exposure;
 
   // Dev-Third-Person: nur fürs Rendern hinter den Spieler, danach Bodycam-Pose zurück
   const tp = thirdPerson?.enabled && !uiActive();
@@ -898,8 +970,13 @@ renderer.setAnimationLoop(() => {
   // Foliage (Wind vom Wetter) und Layer-Gras (biegt sich um Spieler und NPCs)
   updateFoliage(camera, dt, weather.windVector);
   updateGrass(camera, dt, weather.windVector, grassBenders());
-  weather.render(camera, dt);
-  water.renderReflection(camera);
+  // Spiegelungen erst ab dem zweiten Frame: vorher gibt es noch keine Schattenkarten (GL-Warnungen je Mesh)
+  if (!firstFrame) {
+    weather.render(camera, dt);
+    water.renderReflection(camera);
+  }
+  shadowScheduler.update(camera, dt, fog.far);
+  sceneComposer.render(dt);
   composer.render(dt);
   if (tp) thirdPerson!.restore(camera);
   if (firstFrame) {
@@ -918,16 +995,21 @@ renderer.setAnimationLoop(() => {
       `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ` +
       `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
   }
-  const p = player.position;
-  stats.innerHTML =
-    `FPS ${fps} · ${mapData.name}${thirdPerson?.enabled ? ' · [DEV] Third Person' : ''}<br>` +
-    `Pos ${p.x.toFixed(1)} / ${p.y.toFixed(1)} / ${p.z.toFixed(1)}<br>` +
-    `Sichtweite ${d.fogEnabled ? Math.round(fogFar(d.viewDistance)) + ' m' : 'aus'}<br>` +
-    `Wetter ${WEATHER_LABEL[weatherNow()]} · Nässe ${Math.round(weather.wetness * 100)}% · Pfützen ${Math.round(weather.puddleFill * 100)}%` +
-    (weather.snowCover > 0.005 ? ` · Schnee ${Math.round(weather.snowCover * 100)}%` : '') +
-    `<br>` +
-    `Schüsse ${shots} · ${lastShot}<br>` +
-    `Haltung ${player.isCrouching ? 'geduckt' : 'stehend'}${player.isAiming ? ' · zielt' : ''}` +
-    (player.coverState !== 'none' ? ` · Deckung: ${COVER_LABEL[player.coverState]}` : '') +
-    (player.water.state !== 'none' ? `<br>Wasser: ${WATER_LABEL[player.water.state]} · Tiefe ${player.water.depth.toFixed(2)} m` : '');
+  // Debug-Text: 8×/s reicht – jeder innerHTML-Wechsel kostet Layout
+  statsTimer -= dt;
+  if (statsTimer <= 0 && !stats.classList.contains('hidden')) {
+    statsTimer = 0.125;
+    const p = player.position;
+    stats.innerHTML =
+      `FPS ${fps} · ${mapData.name}${thirdPerson?.enabled ? ' · [DEV] Third Person' : ''}<br>` +
+      `Pos ${p.x.toFixed(1)} / ${p.y.toFixed(1)} / ${p.z.toFixed(1)}<br>` +
+      `Sichtweite ${d.fogEnabled ? Math.round(fogFar(d.viewDistance)) + ' m' : 'aus'}<br>` +
+      `Wetter ${WEATHER_LABEL[weatherNow()]} · Nässe ${Math.round(weather.wetness * 100)}% · Pfützen ${Math.round(weather.puddleFill * 100)}%` +
+      (weather.snowCover > 0.005 ? ` · Schnee ${Math.round(weather.snowCover * 100)}%` : '') +
+      `<br>` +
+      `Schüsse ${shots} · ${lastShot}<br>` +
+      `Haltung ${player.isCrouching ? 'geduckt' : 'stehend'}${player.isAiming ? ' · zielt' : ''}` +
+      (player.coverState !== 'none' ? ` · Deckung: ${COVER_LABEL[player.coverState]}` : '') +
+      (player.water.state !== 'none' ? `<br>Wasser: ${WATER_LABEL[player.water.state]} · Tiefe ${player.water.depth.toFixed(2)} m` : '');
+  }
 });

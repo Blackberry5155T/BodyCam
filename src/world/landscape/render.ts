@@ -3,6 +3,7 @@ import { BLOCK, type ChangeKind, type LandscapeData, type Rect } from './data.ts
 import { MAX_LAYERS } from './layers.ts';
 import { loadTextureSet, onTexturesInvalidated, type TexSetData } from './textures.ts';
 import { surfaceDef, type SurfaceId } from '../surfaces.ts';
+import { injectAtmosphere } from '../../rendering/atmosphere.ts';
 
 // CDLOD-Rendering (Continuous Distance-Dependent Level of Detail, Strugar 2009):
 // Ein einziges 32×32-Gitter wird pro Quadtree-Knoten instanziert; der Vertex-Shader liest die Höhe aus einer
@@ -659,6 +660,7 @@ export class LandscapeRenderer {
     // W_CUSTOM_NORMAL/W_TERRAIN: Wetter-Shader nutzt Geländenormale, Pfützen-Neigung und Porosität der Layer
     mat.defines = { LS_K: this.texK, W_CUSTOM_NORMAL: 'lsN', W_TERRAIN: '' };
     mat.onBeforeCompile = (shader) => {
+      injectAtmosphere(shader);
       Object.assign(shader.uniforms, this.uniforms);
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', `#include <common>\n${COMMON_VERT}`)

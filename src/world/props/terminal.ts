@@ -13,6 +13,7 @@ import {
   SHADOW_LABELS,
   REFLECTION_LABELS,
   VOLUMETRIC_LABELS,
+  AO_LABELS,
   TERRAIN_LABELS,
   FOLIAGE_LABELS,
   keyLabel,
@@ -404,6 +405,7 @@ export class Terminal {
     this.settings.set('foliageDensity', ui.select(x2, y(4), cw, 'Foliage-Dichte', FOLIAGE_LABELS, d.foliageDensity));
     this.settings.set('foliageDistance', ui.select(x2, y(5), cw, 'Foliage-Weite', FOLIAGE_LABELS, d.foliageDistance));
     this.settings.set('grass', ui.toggle(x2, y(6), cw, 'Gras', d.grass));
+    this.settings.set('ao', ui.select(x2, y(7), cw, 'Kontaktschatten', AO_LABELS, d.ao));
     ui.text('Auflösung bezieht sich auf die Pixeldichte des Displays (max. 2x).', x, y(8) + 14, 17, THEME.dim);
     ui.text('Foliage-Dichte dünnt nur Deko ohne Kollision und Sichtschutz aus (z. B. Grasbüschel).', x, y(8) + 40, 17, THEME.dim);
   }
@@ -420,6 +422,7 @@ export class Terminal {
       s.set('aberration', 1);
       s.set('vignette', 1);
       s.set('cameraShake', 1);
+      s.set('motionBlur', 0.5);
     }
     if (ui.button(x + bw + 16, 140, bw, 50, 'KOMPETITIV', { size: 20 })) {
       s.set('lensDistortion', 0.3);
@@ -427,13 +430,16 @@ export class Terminal {
       s.set('aberration', 0.2);
       s.set('vignette', 0.4);
       s.set('cameraShake', 0.4);
+      s.set('motionBlur', 0);
     }
     s.set('lensDistortion', ui.slider('dist', x, 206, w, 'Linsenverzerrung', d.lensDistortion, 0, 1.5, 0.05, pct));
     s.set('grain', ui.slider('grain', x, 262, w, 'Sensorrauschen', d.grain, 0, 2, 0.05, pct));
     s.set('aberration', ui.slider('ab', x, 318, w, 'Chromatische Aberration', d.aberration, 0, 2, 0.05, pct));
     s.set('vignette', ui.slider('vig', x, 374, w, 'Vignette', d.vignette, 0, 1.5, 0.05, pct));
-    s.set('hudOverlay', ui.toggle(x, 430, w, 'REC-Overlay', d.hudOverlay));
-    ui.text('Kompetitiv reduziert Effekte für bessere Sicht; Immersiv ist der volle Bodycam-Look.', x, 510, 17, THEME.dim);
+    s.set('motionBlur', ui.slider('mblur', x, 430, w, 'Bewegungsunschärfe', d.motionBlur, 0, 1, 0.05, pct));
+    s.set('hudOverlay', ui.toggle(x, 486, bw, 'REC-Overlay', d.hudOverlay));
+    s.set('autoExposure', ui.toggle(x + bw + 16, 486, bw, 'Belichtungsautomatik', d.autoExposure));
+    ui.text('Kompetitiv reduziert Effekte für bessere Sicht; Immersiv ist der volle Bodycam-Look.', x, 566, 17, THEME.dim);
   }
 
   private drawSystem(x: number, w: number): void {

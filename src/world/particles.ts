@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { asVolume, FOG_ADDITIVE, FOG_PREMUL, PREMUL_BLEND, sharedUniforms, VOLUME_HEAD, volumeFX } from './volumetrics';
+import { asVolume, FOG_ADDITIVE, FOG_PREMUL, PREMUL_BLEND, sharedUniforms, VOLUME_HEAD, VOLUME_LIGHT_GLSL, VOLUME_UNIFORMS, volumeFX } from './volumetrics';
 import { collideVelocity, ParticleCollider } from './particleCollision';
 import { LightVisibility } from './lightOcclusion';
 
@@ -77,7 +77,7 @@ class ParticleBuffer {
       ...blend,
       vertexShader: VERT,
       fragmentShader: mode === 'fire' ? FIRE_FRAG : mode === 'smoke' ? SMOKE_FRAG : SPARK_FRAG,
-      defines: mode === 'spark' ? { STRETCH: 1 } : mode === 'fire' ? { STRETCH: 1, FIRE: 1 } : {},
+      defines: mode === 'spark' ? { STRETCH: 1 } : mode === 'fire' ? { STRETCH: 1, FIRE: 1 } : { SMOKE_LIT: 1 },
     });
     this.mesh = new THREE.Mesh(geo, material);
     this.mesh.frustumCulled = false;
@@ -112,6 +112,16 @@ const VERT = /* glsl */ `
   varying vec3 vRight;
   varying vec3 vUp;
   #include <fog_pars_vertex>
+  #ifdef SMOKE_LIT
+    // Rauch: Licht und Verdrängung je Ecke (interpoliert) statt je Pixel – Rauchballen liegen dutzendfach
+    // übereinander, die Lichtschleife pro Pixel war dort der teuerste Teil des ganzen Bildes
+    ${VOLUME_UNIFORMS}
+    ${VOLUME_LIGHT_GLSL}
+    uniform vec4 uLightVis;
+    varying vec3 vLit;
+    varying vec3 vLitDir;
+    varying float vDis;
+  #endif
   void main() {
     vec3 camR = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
     vec3 camU = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
@@ -146,6 +156,10 @@ const VERT = /* glsl */ `
     vec4 mvPosition = viewMatrix * vec4(wp, 1.0);
     vViewZ = -mvPosition.z;
     gl_Position = projectionMatrix * mvPosition;
+    #ifdef SMOKE_LIT
+      vLit = vLightDir(wp, normalize(wp - cameraPosition), 0.35, true, uLightVis, vLitDir);
+      vDis = vDisturb(wp);
+    #endif
     #include <fog_vertex>
   }
 `;
@@ -180,8 +194,10 @@ const FIRE_FRAG = /* glsl */ `
     float taper = mix(1.0, 0.55, clamp(c.y * 0.5 + 0.5, 0.0, 1.0));
     float r = length(vec2(c.x / taper, c.y));
     vec3 np = vec3(vUv * vec2(1.2, 0.8), seed * 13.0) + vec3(0.0, -vTime * 1.3, vTime * 0.2);
-    float n = vNoise3(np * 0.5) * 0.6 + vNoise3(np * 1.3 + 0.5) * 0.4;
-    float shape = 1.0 - smoothstep(0.25, 1.0, r + (n - 0.5) * 0.9 * (0.4 + age));
+    float n = vNoise3(np * 0.5) * 0.5 + vNoise3(np * 1.3 + 0.5) * 0.33 + vNoise3(np * 3.1 + 0.2) * 0.17;
+    float shape = 1.0 - smoothstep(0.25, 1.0, r + (n - 0.5) * 1.1 * (0.4 + age));
+    // steilere Flanke: scharf begrenzte Zungen, weniger Schleier zwischen den Partikeln
+    shape *= shape;
     // Funken/Glut (Helligkeit > 1.5) sind kompakte Punkte
     float isEmber = step(1.5, vData.w);
     float ember = exp(-dot(c, c) * 5.0);
@@ -191,8 +207,9 @@ const FIRE_FRAG = /* glsl */ `
     heat = mix(heat, 0.75 + 0.25 * (1.0 - age), isEmber);
     vec3 col = fireRamp(heat) * uTint;
     float bright = mix(vData.w, (vData.w - 1.5) * 3.0, isEmber);
-    // Kern deutlich über 1.0 → Bloom
-    col *= (0.35 + heat * heat * 3.2) * bright;
+    // Viele Flammenpartikel überlagern sich additiv: einzeln mäßig hell, in der Summe liegt der Kern
+    // deutlich über 1.0 (Bloom), während die Ränder orange/rot bleiben statt weiß auszubrennen
+    col *= mix(0.1 + heat * heat * 1.25, 0.35 + heat * heat * 3.2, isEmber) * bright;
     float fade = smoothstep(0.0, 0.08, age) * (1.0 - smoothstep(0.65, 1.0, age));
     fade *= vSoftFade(vViewZ, 0.25);
     gl_FragColor = vec4(col * shape * fade, 1.0);
@@ -205,7 +222,9 @@ const SMOKE_FRAG = /* glsl */ `
   uniform float uOpacity;
   uniform float uSelfLight;
   uniform vec3 uGlowColor;
-  uniform vec4 uLightVis;
+  varying vec3 vLit;
+  varying vec3 vLitDir;
+  varying float vDis;
   ${FRAG_HEAD}
   void main() {
     float age = vData.x;
@@ -221,15 +240,27 @@ const SMOKE_FRAG = /* glsl */ `
     a *= smoothstep(0.0, 0.12, age) * (1.0 - smoothstep(0.55, 1.0, age));
     a *= vSoftFade(vViewZ, 0.6);
     // Disturb: Spieler/Schüsse verdünnen den Rauch zusätzlich (Partikel werden auf der CPU weggeschoben)
-    a *= 1.0 - 0.6 * vDisturb(vWorldP);
+    a *= 1.0 - 0.6 * vDis;
     if (a < 0.003) discard;
     // Kugelnormale für weiches Licht
     vec3 viewDir = normalize(cameraPosition - vWorldP);
     vec3 nrm = normalize(vRight * c.x + vUp * c.y + viewDir * sqrt(max(0.0, 1.0 - r2)));
     vec3 lit = vAmbient * (0.55 + 0.45 * nrm.y);
+    // Sonne: beleuchtete Seite heller, abgewandte dunkler (vAmbient enthält den ungerichteten Anteil);
+    // im Gegenlicht leuchtet der dünne Rand des Ballens auf (Vorwärtsstreuung)
+    float sunN = dot(nrm, vSunDir);
+    float rimK = pow(max(dot(-viewDir, vSunDir), 0.0), 6.0) * (1.0 - body * 0.7);
+    lit += vSunCol * (0.24 * (max(sunN, 0.0) - 0.3) + 0.35 * rimK);
+    lit = max(lit, vAmbient * 0.25);
+    // Selbstverschattung: der dichte Kern eines Ballens schluckt Licht, die Ränder bleiben hell
+    lit *= mix(1.0, 0.72, body * body);
     // Lichter: Vorwärtsstreuung, zusätzlich etwas Lambert über die Kugelnormale
-    vec3 rd = -viewDir;
-    lit += vLightAtVis(vWorldP, rd, 0.35, true, uLightVis) * 0.12;
+    // Lampen/Feuer/Taschenlampe: Helligkeit kommt je Ecke aus dem Vertex-Shader, die Kugelnormale gibt
+    // dem Ballen eine dem Licht zugewandte helle und eine abgewandte dunkle Seite
+    float lamb = clamp(dot(nrm, normalize(vLitDir + vec3(0.0, 1e-5, 0.0))) * 0.6 + 0.4, 0.0, 1.0);
+    lit += vLit * 0.12 * mix(1.0, lamb, 0.8);
+    // Struktur: dünne Stellen lassen mehr Licht durch, dichte wirken dunkler
+    lit *= 0.7 + 0.6 * n;
     vec3 col = uColor * lit;
     // Glut von unten (Feuer) – nimmt mit dem Alter ab
     col += uGlowColor * uSelfLight * pow(1.0 - age, 3.0) * (0.5 + 0.5 * n);
@@ -250,7 +281,7 @@ const SPARK_FRAG = /* glsl */ `
     vec3 hot = mix(uColor, vec3(1.0, 0.95, 0.8), 0.6);
     vec3 col = mix(hot, uColor * vec3(1.0, 0.35, 0.15), smoothstep(0.2, 1.0, age));
     col *= vData.w * (1.0 - age * age) * 6.0;
-    gl_FragColor = vec4(col * g, 1.0);
+    gl_FragColor = vec4(col * g * vSoftFade(vViewZ, 0.04), 1.0);
     ${FOG_ADDITIVE}
   }
 `;
@@ -271,7 +302,11 @@ export interface EffectControl {
 /** Spieler/Schüsse schieben Partikel weg; gibt zurück, ob ein Schuss durchging */
 function pushByDisturbers(p: Float32Array, i4: number, v: Float32Array, dt: number, scale = 1): number {
   let hit = 0;
-  volumeFX.forEachDisturber((d, isPlayer) => {
+  const list = volumeFX.disturbers;
+  const player = volumeFX.playerDisturber;
+  for (let n = 0; n < list.length; n++) {
+    const d = list[n];
+    const isPlayer = d === player;
     const ax = d.a.x, ay = d.a.y, az = d.a.z;
     const bx = d.b.x - ax, by = d.b.y - ay, bz = d.b.z - az;
     const px = p[i4] - ax, py = p[i4 + 1] - ay, pz = p[i4 + 2] - az;
@@ -280,7 +315,7 @@ function pushByDisturbers(p: Float32Array, i4: number, v: Float32Array, dt: numb
     const ox = px - bx * t, oy = py - by * t, oz = pz - bz * t;
     const dist = Math.sqrt(ox * ox + oy * oy + oz * oz) + 1e-4;
     const r = d.radius * 1.4 + 0.15;
-    if (dist >= r) return;
+    if (dist >= r) continue;
     const f = (1 - dist / r) * d.strength * scale;
     const k = (isPlayer ? 6 + volumeFX.playerVel.length() * 3 : 14) * f * dt;
     v[i4] += (ox / dist) * k;
@@ -291,7 +326,7 @@ function pushByDisturbers(p: Float32Array, i4: number, v: Float32Array, dt: numb
       v[i4] += volumeFX.playerVel.x * f * dt * 1.5;
       v[i4 + 2] += volumeFX.playerVel.z * f * dt * 1.5;
     } else hit = Math.max(hit, f);
-  });
+  }
   return hit;
 }
 
@@ -343,6 +378,31 @@ function worldScale(o: THREE.Object3D): number {
   return (Math.abs(_s.x) + Math.abs(_s.y) + Math.abs(_s.z)) / 3;
 }
 
+/**
+ * Divergenzfreies Wirbelfeld (Rotation eines Sinus-Potentials, zwei Oktaven) → _curl.
+ * Anders als einzelne Sinus-Wellen staucht es Partikel nicht zusammen, sondern rollt sie in Wirbeln auf –
+ * Rauch quillt und dreht sich, statt nur hin und her zu schwanken.
+ */
+const _curl = new THREE.Vector3();
+function curlAt(x: number, y: number, z: number, t: number, seed: number): THREE.Vector3 {
+  let vx = 0, vy = 0, vz = 0;
+  let k = 1.5, amp = 1, tt = t * 0.35 + seed;
+  for (let o = 0; o < 2; o++) {
+    const kx = k * x, ky = k * y, kz = k * z, q = 0.8;
+    const sA = Math.sin(ky + tt), cA = Math.cos(ky + tt);
+    const sB = Math.sin(kz + tt * 1.3 + 1.7), cB = Math.cos(kz + tt * 1.3 + 1.7);
+    const sC = Math.sin(kx + tt * 0.8 + 4.1), cC = Math.cos(kx + tt * 0.8 + 4.1);
+    // ψ = (sA·cos(q·kz+1.3), sB·cos(q·kx+2.1), sC·cos(q·ky+0.7)); v = ∇×ψ / k
+    vx += amp * (-q * sC * Math.sin(q * ky + 0.7) - cB * Math.cos(q * kx + 2.1));
+    vy += amp * (-q * sA * Math.sin(q * kz + 1.3) - cC * Math.cos(q * ky + 0.7));
+    vz += amp * (-q * sB * Math.sin(q * kx + 2.1) - cA * Math.cos(q * kz + 1.3));
+    k *= 2.6;
+    amp *= 0.45;
+    tt = tt * 1.7 + 2.3;
+  }
+  return _curl.set(vx, vy, vz);
+}
+
 // ---------- Rauch ----------
 
 export interface SmokeParams {
@@ -375,6 +435,8 @@ class Smoke {
   private age: Float32Array;
   private size0: Float32Array;
   private order: Uint16Array;
+  private dist: Float32Array;
+  private tmpA: Float32Array;
   private tmpPos: Float32Array;
   private tmpData: Float32Array;
   private tmpVel: Float32Array;
@@ -399,6 +461,8 @@ class Smoke {
     this.age = new Float32Array(cap);
     this.size0 = new Float32Array(cap);
     this.order = new Uint16Array(cap);
+    this.dist = new Float32Array(cap);
+    this.tmpA = new Float32Array(cap);
     this.tmpPos = new Float32Array(cap * 4);
     this.tmpData = new Float32Array(cap * 4);
     this.tmpVel = new Float32Array(cap * 4);
@@ -453,13 +517,15 @@ class Smoke {
       if (age >= this.life[i]) continue;
       const i4 = i * 4;
       const k = age / this.life[i];
-      // Turbulenz (billig: Sinus-Felder)
+      // Turbulenz: Wirbelfeld (wächst mit dem Alter – frischer Rauch steigt als Säule, alter verwirbelt)
       const px = pos[i4], py = pos[i4 + 1], pz = pos[i4 + 2];
-      const tu = p.turbulence * scale;
-      const ax = Math.sin(py * 1.7 + t * 0.9 + data[i4 + 2] * 6) * tu + wind.x * 0.8;
-      const az = Math.cos(py * 1.3 + t * 0.7 + data[i4 + 2] * 4) * tu + wind.z * 0.8;
+      const tu = p.turbulence * scale * (0.5 + k);
+      const cs = 1 / Math.max(scale, 1e-3);
+      const cu = curlAt(px * cs, py * cs, pz * cs, t, data[i4 + 2] * 0.6);
+      const ax = cu.x * tu + wind.x * 0.8;
+      const az = cu.z * tu + wind.z * 0.8;
       vel[i4] = (vel[i4] + ax * dt) * drag;
-      vel[i4 + 1] = (vel[i4 + 1] + (p.rise * scale * (1 - k) * 0.5 - vel[i4 + 1] * 0.3) * dt) * 1;
+      vel[i4 + 1] = vel[i4 + 1] + (p.rise * scale * (1 - k) * 0.5 - vel[i4 + 1] * 0.3 + cu.y * tu * 0.45) * dt;
       vel[i4 + 2] = (vel[i4 + 2] + az * dt) * drag;
       pushByDisturbers(pos, i4, vel, dt);
       // kompakt: an Stelle j schreiben
@@ -552,36 +618,48 @@ class Smoke {
     }
   }
 
-  /** hinten → vorne sortieren (Alpha-Blending) */
+  /** hinten → vorne sortieren (Alpha-Blending). Ohne Allokationen: die Partikel liegen vom letzten Frame
+   *  her fast sortiert vor, Insertion-Sort ist dann praktisch linear. */
   private sort(cam: THREE.Vector3) {
     const n = this.n;
     if (n < 2) return;
     const { pos, data, vel } = this.buf;
-    const d = new Float32Array(n);
+    const d = this.dist, ord = this.order;
+    let sorted = true;
     for (let i = 0; i < n; i++) {
       const i4 = i * 4;
       const dx = pos[i4] - cam.x, dy = pos[i4 + 1] - cam.y, dz = pos[i4 + 2] - cam.z;
       d[i] = dx * dx + dy * dy + dz * dz;
-      this.order[i] = i;
+      ord[i] = i;
+      if (i > 0 && d[i] > d[i - 1]) sorted = false;
     }
-    const ord = Array.from(this.order.subarray(0, n)).sort((a, b) => d[b] - d[a]);
+    if (sorted) return;
+    for (let i = 1; i < n; i++) {
+      const o = ord[i];
+      const key = d[o];
+      let j = i - 1;
+      while (j >= 0 && d[ord[j]] < key) {
+        ord[j + 1] = ord[j];
+        j--;
+      }
+      ord[j + 1] = o;
+    }
     const tp = this.tmpPos, td = this.tmpData, tv = this.tmpVel;
-    const life = new Float32Array(n), age = new Float32Array(n), s0 = new Float32Array(n);
     for (let k = 0; k < n; k++) {
-      const i = ord[k];
-      tp.set(pos.subarray(i * 4, i * 4 + 4), k * 4);
-      td.set(data.subarray(i * 4, i * 4 + 4), k * 4);
-      tv.set(vel.subarray(i * 4, i * 4 + 4), k * 4);
-      life[k] = this.life[i];
-      age[k] = this.age[i];
-      s0[k] = this.size0[i];
+      const i4 = ord[k] * 4, k4 = k * 4;
+      tp[k4] = pos[i4]; tp[k4 + 1] = pos[i4 + 1]; tp[k4 + 2] = pos[i4 + 2]; tp[k4 + 3] = pos[i4 + 3];
+      td[k4] = data[i4]; td[k4 + 1] = data[i4 + 1]; td[k4 + 2] = data[i4 + 2]; td[k4 + 3] = data[i4 + 3];
+      tv[k4] = vel[i4]; tv[k4 + 1] = vel[i4 + 1]; tv[k4 + 2] = vel[i4 + 2]; tv[k4 + 3] = vel[i4 + 3];
     }
     pos.set(tp.subarray(0, n * 4));
     data.set(td.subarray(0, n * 4));
     vel.set(tv.subarray(0, n * 4));
-    this.life.set(life);
-    this.age.set(age);
-    this.size0.set(s0);
+    // Lebensdauer, Alter und Startgröße in derselben Reihenfolge
+    const t = this.tmpA;
+    for (const arr of [this.life, this.age, this.size0]) {
+      for (let k = 0; k < n; k++) t[k] = arr[ord[k]];
+      arr.set(t.subarray(0, n));
+    }
   }
 
   clear() {

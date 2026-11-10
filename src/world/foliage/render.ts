@@ -3,6 +3,7 @@ import type { Collider, CylinderCollider } from '../collision.ts';
 import { CELL, cellKey, cellOf, cellX, cellZ, STRIDE, type FoliageCell, type FoliageData } from './data.ts';
 import { bakeImpostor, disposeMeshSet, IMPOSTOR_FRAMES, modelMeshSet, procMeshSet, type FoliageMeshSet, type ImpostorAtlas } from './meshes.ts';
 import { thinnable, type FoliageType } from './types.ts';
+import { injectAtmosphere } from '../../rendering/atmosphere.ts';
 
 // Foliage zeichnen: je Typ ein InstancedMesh pro LOD-Stufe + eins für Impostoren (Billboards aus dem Atlas).
 // Die Instanz-Puffer werden neu gefüllt, wenn sich die Kamera ein Stück bewegt hat (nah: 2 m, Impostoren: 12 m)
@@ -83,6 +84,7 @@ interface WindUniforms {
 
 function patchWind(m: THREE.Material, u: WindUniforms): void {
   m.onBeforeCompile = (shader) => {
+    injectAtmosphere(shader);
     Object.assign(shader.uniforms, u);
     shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>\n${WIND_HEAD}`).replace('#include <begin_vertex>', WIND_BODY);
   };
@@ -94,6 +96,7 @@ function impostorMaterial(atlas: ImpostorAtlas): THREE.MeshStandardMaterial {
   const uImp = { value: new THREE.Vector4(atlas.halfW, atlas.yMin, atlas.yMax, IMPOSTOR_FRAMES) };
   const uImpNormal = { value: atlas.normal.texture };
   m.onBeforeCompile = (shader) => {
+    injectAtmosphere(shader);
     shader.uniforms.uImp = uImp;
     shader.uniforms.uImpNormal = uImpNormal;
     shader.vertexShader = shader.vertexShader

@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { atmosphere } from '../rendering/atmosphere.ts';
 
 // Himmelskuppel mit Farbverlauf, sichtbarer Sonnenscheibe und Leuchten.
 // Wird immer auf der Far-Plane gezeichnet (unabhängig von Kamera-Position und -Reichweite),
@@ -34,6 +35,9 @@ const fragmentShader = /* glsl */ `
   uniform float discOn;
   uniform float overcast;
   uniform float flash;
+  uniform vec4 bcFogA;
+  uniform vec3 bcFogSunDir;
+  uniform vec3 bcFogSunCol;
   varying vec3 vDir;
 
   float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
@@ -45,7 +49,12 @@ const fragmentShader = /* glsl */ `
       ? mix(horizon, zenith, pow(smoothstep(0.0, 1.0, y), 0.55))
       : mix(horizon, ground, smoothstep(0.0, 0.12, -y));
     // Horizont geht in den Distanznebel über, damit keine Kante zur Geometrie entsteht
-    col = mix(col, fogColor, fogMix * (1.0 - smoothstep(-0.05, 0.3, y)));
+    // (gleiche Nebelfarbe wie in den Materialien: Grundfarbe + Einstreuung Richtung Sonne, siehe atmosphere.ts)
+    float fc = max(dot(dir, bcFogSunDir), 0.0);
+    float fc2 = fc * fc;
+    float fc8 = fc2 * fc2 * fc2 * fc2;
+    vec3 fogC = fogColor * (1.0 + bcFogA.w) + bcFogSunCol * (fc2 * fc2 * 0.35 + fc8 * fc8 * 0.65);
+    col = mix(col, fogC, fogMix * (1.0 - smoothstep(-0.05, 0.3, y)));
 
     // Bewölkung: entsättigt und dunkler, Wolkenstruktur über Richtungs-Rauschen
     float lum = dot(col, vec3(0.3, 0.59, 0.11));
@@ -109,6 +118,10 @@ export class Sky {
         discOn: { value: 1 },
         overcast: { value: 0 },
         flash: { value: 0 },
+        // geteilte Referenzen: Nebel am Horizont passt immer zum Nebel auf der Geometrie
+        bcFogA: atmosphere.uniforms.bcFogA,
+        bcFogSunDir: atmosphere.uniforms.bcFogSunDir,
+        bcFogSunCol: atmosphere.uniforms.bcFogSunCol,
       },
     });
     // Radius ist für die Darstellung egal (Richtung zählt); groß, damit Hilfs-Passes (Outline) nicht stören

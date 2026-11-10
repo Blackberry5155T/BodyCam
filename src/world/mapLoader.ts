@@ -5,6 +5,7 @@ import { SCALE, type Collider } from './collision.ts';
 import { SunLight } from 'three/examples/jsm/lights/SunLight.js';
 import { Sky } from './sky.ts';
 import { SUN_TYPE, sunWorld } from './sun.ts';
+import { atmosphere } from '../rendering/atmosphere.ts';
 
 // Baut aus MapData die Szene. Gemeinsam genutzt von Spiel (main.ts) und Editor.
 
@@ -168,7 +169,6 @@ export class WorldRig {
   // SunLight (three r186): 2 Schattenkaskaden, die der jeweils rendernden Kamera folgen
   readonly sun = new SunLight();
   readonly sky = new Sky();
-  readonly groundFog: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
   // Grundwerte ohne Wetter; setWeather() rechnet Bewölkung/Blitz darauf
   private baseSun = 1;
   private baseHemi = 1;
@@ -184,14 +184,7 @@ export class WorldRig {
     this.sun.shadow.bias = -0.00015;
     this.sun.shadow.normalBias = 0.04;
     this.sun.shadow.radius = 2;
-    this.groundFog = new THREE.Mesh(
-      new THREE.PlaneGeometry(1, 1),
-      new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false }),
-    );
-    this.groundFog.rotation.x = -Math.PI / 2;
-    this.groundFog.userData.noPick = true;
-    this.groundFog.userData.noShot = true;
-    this.group.add(this.hemi, this.sun, this.groundFog, this.sky.mesh);
+    this.group.add(this.hemi, this.sun, this.sky.mesh);
     this.apply(world);
   }
 
@@ -208,11 +201,8 @@ export class WorldRig {
     this.sun.castShadow = w.sunShadow;
     // Schattendistanz = min(shadow.camera.far, Kamera.far)
     this.sun.shadow.camera.far = Math.max(10, w.sunShadowDistance);
-    this.groundFog.material.color.set(w.fogColor);
-    this.groundFog.material.opacity = w.groundFogOpacity;
-    this.groundFog.position.y = w.groundFogHeight;
-    this.groundFog.scale.set(w.groundFogSize, w.groundFogSize, 1);
-    this.groundFog.visible = w.groundFog;
+    // Bodennebel: analytische Höhennebel-Schicht in allen Materialien (siehe rendering/atmosphere.ts)
+    atmosphere.setLayer(w.groundFog, w.groundFogOpacity, w.groundFogHeight);
     this.sky.mesh.visible = w.sky;
     this.sky.apply({
       zenith: w.skyZenith,
@@ -244,11 +234,14 @@ export class WorldRig {
     this.sun.intensity = this.baseSun * (1 - 0.8 * o);
     this.hemi.intensity = this.baseHemi * (1 - 0.15 * o) + this.flash * 3;
     this.sky.setWeather(o, this.flash);
+    atmosphere.setSun(this.sun.position, this.sun.color, this.sun.visible ? this.baseSun : 0);
+    atmosphere.setWeather(o, this.flash);
   }
 
   /** Distanznebel an/aus: Himmel blendet am Horizont in die Nebelfarbe */
   setFog(on: boolean): void {
     this.sky.setFog(on);
+    atmosphere.setEnabled(on);
   }
 }
 
