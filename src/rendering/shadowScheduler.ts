@@ -22,6 +22,34 @@ const _sphere = new THREE.Sphere();
 const _frustum = new THREE.Frustum();
 const _m = new THREE.Matrix4();
 
+// Grafik-Einstellung „Schatten“: Faktor auf die ursprüngliche Kartengröße jedes Lichts (Niedrig = 0.5)
+let mapScale = 1;
+const baseSize = new WeakMap<THREE.LightShadow, number>();
+
+/** Kartengröße eines Lichts an den Faktor anpassen; die alte Karte wird freigegeben und neu angelegt */
+export function scaleShadowMap(shadow: THREE.LightShadow): void {
+  let base = baseSize.get(shadow);
+  if (base === undefined) baseSize.set(shadow, (base = shadow.mapSize.x));
+  const size = Math.max(64, Math.round(base * mapScale));
+  if (shadow.mapSize.x === size && shadow.mapSize.y === size) return;
+  shadow.mapSize.set(size, size);
+  const map = shadow.map;
+  if (map) {
+    map.depthTexture?.dispose();
+    map.dispose();
+    (shadow as { map: THREE.WebGLRenderTarget | null }).map = null;
+  }
+}
+
+/** Faktor setzen und auf alle Schatten werfenden Lichter der Szene anwenden (später entstehende: beim nächsten Scan) */
+export function setShadowMapScale(scene: THREE.Object3D, scale: number): void {
+  mapScale = scale;
+  scene.traverse((o) => {
+    const l = o as THREE.Object3D & { isLight?: boolean; shadow?: THREE.LightShadow };
+    if (l.isLight && l.castShadow && l.shadow) scaleShadowMap(l.shadow);
+  });
+}
+
 export class ShadowScheduler {
   private lights: LocalLight[] = [];
   private exclude = new Set<THREE.Object3D>();
@@ -40,7 +68,10 @@ export class ShadowScheduler {
     this.lights.length = 0;
     this.scene.traverse((o) => {
       const l = o as THREE.Object3D & { isPointLight?: boolean; isSpotLight?: boolean };
-      if ((!l.isPointLight && !l.isSpotLight) || !l.castShadow || this.exclude.has(l)) return;
+      if ((!l.isPointLight && !l.isSpotLight) || !l.castShadow) return;
+      // neue Lichter (Modelle, Scripts) bekommen die eingestellte Schattenqualität
+      scaleShadowMap((l as LocalLight).shadow);
+      if (this.exclude.has(l)) return;
       this.lights.push(l as LocalLight);
     });
   }

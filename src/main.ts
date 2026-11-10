@@ -30,7 +30,7 @@ import { GodRaysPass } from './rendering/godRaysPass.ts';
 import { AOPass } from './rendering/postfx/aoPass.ts';
 import { AutoExposure } from './rendering/postfx/autoExposure.ts';
 import { MotionBlurPass } from './rendering/postfx/motionBlurPass.ts';
-import { ShadowScheduler } from './rendering/shadowScheduler.ts';
+import { ShadowScheduler, setShadowMapScale } from './rendering/shadowScheduler.ts';
 import { atmosphere } from './rendering/atmosphere.ts';
 import { PhysicsWorld, initPhysics } from './physics/physics.ts';
 import { LandscapeRenderer, landscapeSurfaceOf, surfaceAtWorld, updateLandscapes } from './world/landscape/render.ts';
@@ -500,12 +500,6 @@ const updateResolution = () => {
 };
 
 // --- Einstellungen anwenden ---
-const shadowLights: { shadow: THREE.LightShadow; base: number }[] = [];
-scene.traverse((o) => {
-  const l = o as THREE.Object3D & { isLight?: boolean; shadow?: THREE.LightShadow };
-  if (l.isLight && l.castShadow && l.shadow) shadowLights.push({ shadow: l.shadow, base: l.shadow.mapSize.x });
-});
-
 const applyShadows = (level: number) => {
   const enabled = level > 0;
   if (renderer.shadowMap.enabled !== enabled) {
@@ -516,15 +510,7 @@ const applyShadows = (level: number) => {
       if (m) for (const mat of Array.isArray(m) ? m : [m]) mat.needsUpdate = true;
     });
   }
-  const factor = level === 1 ? 0.5 : 1;
-  for (const l of shadowLights) {
-    const size = l.base * factor;
-    if (l.shadow.mapSize.x !== size) {
-      l.shadow.mapSize.set(size, size);
-      l.shadow.map?.dispose();
-      (l.shadow as { map: THREE.WebGLRenderTarget | null }).map = null;
-    }
-  }
+  setShadowMapScale(scene, level === 1 ? 0.5 : 1);
 };
 
 const applySetting = (key: keyof SettingsData) => {
